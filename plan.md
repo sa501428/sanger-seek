@@ -1,75 +1,136 @@
-Yes — I’d explicitly structure the app around the `.seq` + `.ab1` pairing and make the primary review interface feel like a modernized version of the screenshot you attached.
+# Sanger Seek — desktop Sanger trace review app
 
-## Revised client-side Sanger viewer spec
+A local desktop application for reviewing Sanger sequencing results: load `.ab1` chromatograms
+and their exported `.seq` base calls, align reads against a reference, reconcile forward/reverse
+evidence, and review candidate variants directly against the raw traces. The primary review
+interface is a modernized, decluttered version of classic trace-review software: **keep the
+information density available, but use progressive disclosure.** The default screen should
+immediately answer *"where are the differences, do forward/reverse support them, and what do
+the peaks actually look like?"* Everything else sits behind expandable QC/details panels.
 
-### 1. Browser-only architecture
+Nothing ever leaves the machine.
 
-* **HTML + CSS + JavaScript/TypeScript only**
-* No server, API, database, or sequence upload.
-* Parse and analyze everything using:
+## 1. Stack and architecture (desktop Python)
 
-  * `FileReader`
-  * `ArrayBuffer` / `DataView`
-  * Web Workers for alignment and analysis
-  * Canvas/WebGL or SVG for chromatogram rendering
-* Optional IndexedDB for locally saved projects.
-* Deploy as static files and optionally support offline/PWA use.
+* **Python 3.11+** (developed against 3.13)
+* **PySide6 / Qt** — desktop UI
+* **pyqtgraph** — fast interactive chromatogram plotting, zoom/pan/cursors
+* **Biopython** — `.ab1` (ABIF) parsing, FASTA, GenBank, sequence manipulation, translation
+* **NumPy** — trace arrays / signal calculations
+* **edlib** — fast read↔reference alignment (with a pure-Python/NumPy fallback aligner so the
+  app still works if the compiled extension is unavailable)
+* Plain Python code for:
+  * `.seq` parsing
+  * file pairing / forward-reverse matching
+  * QC + quality trimming
+  * consensus / strand reconciliation
+  * SNV/indel/mixed-base detection
+  * codon/protein consequence calculation
+  * trace-quality metrics
 
-### 2. File handling
+Analysis runs on background threads (`QThreadPool`) so the UI never blocks; results are
+delivered back to the UI via Qt signals.
 
-**`.ab1` — raw chromatogram source**
+```
+Open Project
+   │
+   ├── reference.fasta / .gb
+   │
+   └── Sample
+       ├── forward.ab1
+       ├── forward.seq
+       ├── reverse.ab1
+       └── reverse.seq
+                │
+                ▼
+         Parse + QC reads
+                │
+                ▼
+       Align against reference
+                │
+                ▼
+       Reconcile FWD + REV
+                │
+                ▼
+       Detect / annotate variants
+                │
+                ▼
+    ┌─────────────────────────────┐
+    │ Modern chromatogram viewer  │
+    │ Sequence alignment          │
+    │ Variant navigator           │
+    │ QC / noise inspection       │
+    └─────────────────────────────┘
+```
 
-Parse the ABIF binary directly in JavaScript to extract:
+### Why desktop
 
-* A/C/G/T trace arrays (`DATA` records)
+The desktop removes the browser security model's friction. The app can directly open a folder
+containing:
+
+```
+Patient001_F.ab1
+Patient001_F.seq
+Patient001_R.ab1
+Patient001_R.seq
+Patient002_F.ab1
+...
+```
+
+and automatically pair the files, rather than requiring repeated file-selection operations.
+It also gets straightforward drag-and-drop, folder scanning, local save/open projects, native
+file dialogs, CSV exports, persistent settings, larger datasets, and real threading.
+
+## 2. File handling
+
+**`.ab1` — raw chromatogram source.** Parsed via Biopython's ABIF reader to extract:
+
+* A/C/G/T trace arrays (`DATA9–12`, analyzed traces; channel order from `FWO_`)
 * called bases (`PBAS`)
 * peak/sample positions (`PLOC`)
 * base quality values (`PCON`)
-* sequencing metadata where useful
+* run/instrument metadata where useful (`SMPL`, `MCHN`, `DySN`, run dates)
 
-The `.ab1` should be the authoritative source for the **actual electropherogram**, peak quality, mixed peaks, noise, and manual visual review.
+The `.ab1` is the authoritative source for the **actual electropherogram**, peak quality,
+mixed peaks, noise, and manual visual review.
 
-**`.seq` — called sequence**
+**`.seq` — exported called sequence.** Parsed as plain text (optionally FASTA-headered):
+normalize whitespace/headers, associate with the corresponding `.ab1` (same basename), use as
+the imported base-call sequence, and compare against the AB1's embedded calls — discrepancies
+are counted and inspectable, never silently resolved. `.ab1` alone also works, since AB1
+contains base calls itself.
 
-Parse as plain-text nucleotide sequence:
-
-* normalize whitespace/header formatting
-* associate it with the corresponding `.ab1`
-* use it as an imported base-call sequence when present
-* compare it against the calls extracted from the AB1 and flag discrepancies if useful
-
-If both exist:
-
-```text
+```
 sample_F.ab1   -> trace + peaks + qualities + embedded base calls
 sample_F.seq   -> exported/called nucleotide sequence
 ```
 
-Treat them as two representations of the **same read**, not independent sequencing evidence.
+They are two representations of the **same read**, not independent sequencing evidence.
 
-The app should also work with `.ab1` alone because AB1 generally contains the base calls itself.
+**Reference.** FASTA for sequence-only; GenBank for CDS/exon/gene annotation and amino-acid
+consequences (Biopython `SeqRecord.features`, including `join`/`complement` locations and
+`codon_start`).
 
-**Reference**
+**Pairing heuristics.** Group files into samples by basename after stripping direction tokens
+(`_F`, `_R`, `-FWD`, `_REV`, `_forward`, …). The token is only an orientation *hint*; final
+orientation is decided by alignment. Users can re-assign reads between samples in the UI.
 
-* FASTA for sequence-only reference.
-* GenBank optionally for CDS/exon/gene annotation and amino-acid consequences.
-
-### 3. Analysis pipeline
+## 3. Analysis pipeline
 
 For each sample/read:
 
-```text
+```
 Load files
    ↓
 Parse AB1 / SEQ
    ↓
-QC + low-quality trimming
+QC + low-quality trimming (Mott algorithm on PCON)
    ↓
-Determine F/R orientation
+Determine F/R orientation (best alignment of read vs revcomp)
    ↓
 Reverse-complement when required
    ↓
-Align read to reference
+Align read to reference (edlib infix alignment → op path)
    ↓
 Map trace peaks → reference coordinates
    ↓
@@ -85,26 +146,17 @@ Detect:
 * SNVs
 * insertions
 * deletions
-* ambiguous/mixed bases
+* ambiguous/mixed bases (IUPAC calls and/or secondary-peak ratio)
 * forward/reverse discordance
 
-With an annotated coding reference, additionally calculate:
+With an annotated coding reference, additionally calculate: synonymous / missense / nonsense /
+frameshift / in-frame indel, codon change, and protein change, e.g. `c.944C>T / p.Thr315Ile`.
 
-* synonymous
-* missense
-* nonsense
-* frameshift
-* in-frame indel
-* codon change
-* protein change, e.g. `c.944C>T / p.Thr315Ile`
+## 4. Main review interface
 
-### 4. Main review interface
+Single main window, top-to-bottom:
 
-Use the attached interface as the functional inspiration, but simplify it substantially.
-
-A good screen hierarchy would be:
-
-```text
+```
 ┌ Sample / Reference / QC summary ───────────────────────────────┐
 │ Sample 014   Gene XYZ   2 reads   3 candidate variants        │
 └────────────────────────────────────────────────────────────────┘
@@ -133,30 +185,26 @@ A good screen hierarchy would be:
 └────────────────────────────────────────────────────────────────┘
 ```
 
-### 5. Chromatogram UX
+Plus a samples list dock on the left (one row per sample with read counts and QC chips).
 
-Compared with the screenshot, eliminate most of the dense diagnostic-looking clutter.
+## 5. Chromatogram UX
 
-The trace viewer should have:
+Eliminate dense diagnostic-looking clutter. The trace viewer (pyqtgraph) has:
 
 * smooth A/C/G/T traces
-* synchronized base calls above peaks
-* reference coordinate ruler
+* synchronized base calls above peaks (rendered only for the visible range)
+* reference-coordinate ruler (custom axis mapping trace samples → reference positions)
 * quality shading
 * selected-position crosshair
 * variant flags
-* zoom/pan
-* drag navigation
-* keyboard left/right between bases
-* next/previous variant shortcuts
+* zoom/pan, drag navigation
+* keyboard left/right between bases; next/previous variant shortcuts
 
-When a user clicks `c.944C>T`, every view should instantly center on that nucleotide.
+When a user clicks `c.944C>T`, every view instantly centers on that nucleotide. Forward and
+reverse traces are displayed in the **same reference orientation** (reverse reads are drawn
+mirrored with complemented channel assignment), so users never mentally reverse a strand.
 
-Forward and reverse traces should be displayed in the **same reference orientation**, so users do not have to mentally reverse one strand.
-
-### 6. Noise / mixed-peak visualization
-
-The screenshot contains useful signal/noise information, but it can be communicated more cleanly.
+## 6. Noise / mixed-peak visualization
 
 For every called base calculate/display:
 
@@ -169,16 +217,16 @@ For every called base calculate/display:
 
 For candidate heterogeneity/mixed peaks, show a small indicator such as:
 
-```text
+```
 C 72%
 T 28%
 ```
 
 and let the user inspect the original trace rather than hiding this behind an automated call.
 
-### 7. Variant review table
+## 7. Variant review table
 
-Keep a polished fixed panel rather than the dense table in the screenshot:
+A polished fixed panel (QTableView):
 
 | Variant    | Protein     | Fwd | Rev | Trace | Confidence |
 | ---------- | ----------- | --: | --: | ----- | ---------- |
@@ -186,25 +234,16 @@ Keep a polished fixed panel rather than the dense table in the screenshot:
 | c.1012delA | p.X338fs    |   ✓ |   ✓ | Clean | High       |
 | c.1173G>A  | synonymous  |   ✓ |   ? | Noisy | Review     |
 
-Clicking any row jumps to that trace.
+Clicking any row jumps every view to that trace position.
 
-Filters:
+Filters: all differences / coding only / missense+nonsense / indels / mixed peaks /
+strand disagreement / low confidence. Export the (filtered) table to CSV.
 
-* all differences
-* coding only
-* missense/nonsense
-* indels
-* mixed peaks
-* strand disagreement
-* low confidence
+## 8. Forward/reverse reconciliation
 
-### 8. Forward/reverse reconciliation
+A first-class object, not two unrelated traces. For each reference position:
 
-Make this a first-class object rather than two unrelated traces.
-
-For each reference position:
-
-```text
+```
 Reference: C
 Forward:   T   Q=34
 Reverse:   T   Q=37
@@ -215,7 +254,7 @@ Status:    Supported on both strands
 
 Versus:
 
-```text
+```
 Reference: C
 Forward:   T   Q=31
 Reverse:   C   Q=36
@@ -224,13 +263,13 @@ Consensus: ?
 Status:    Strand disagreement — review
 ```
 
-This should drive the mutation flags.
+This drives the mutation flags and the confidence column.
 
-### 9. Multi-read / multi-amplicon support
+## 9. Multi-read / multi-amplicon support
 
 Data model:
 
-```text
+```
 Project
  └─ Samples[]
      ├─ Reference
@@ -241,38 +280,55 @@ Project
      │   ├─ trace
      │   ├─ quality
      │   └─ alignment
-     ├─ Amplicons[]
      ├─ Consensus
      └─ Variants[]
 ```
 
-If multiple contigs/amplicons exist, map each independently onto the same reference and produce one reference-coordinate-based variant list.
+If multiple reads/amplicons exist, each is mapped independently onto the same reference and
+merged into one reference-coordinate-based variant list.
 
-### 10. Implementation decisions for an LLM
+## 10. Repository layout
 
-I’d give the implementing model these constraints:
+```
+sanger-seek/
+  pyproject.toml
+  sanger_seek/
+    __main__.py          # python -m sanger_seek
+    app.py               # QApplication bootstrap, CLI flags (--demo, --screenshot)
+    core/
+      model.py           # dataclasses: Project, Sample, Read, Variant, Reference
+      abif.py            # AB1 → TraceData (traces, calls, ploc, quals, metadata)
+      seqfile.py         # .seq parsing
+      reference.py       # FASTA/GenBank loading (seq + CDS features)
+      pairing.py         # folder scan, sample/read grouping, orientation hints
+      trim.py            # Mott quality trimming
+      align.py           # edlib alignment + read↔ref coordinate maps (NW fallback)
+      peaks.py           # per-base peak metrics
+      variants.py        # per-read candidate calls
+      consensus.py       # strand reconciliation → sample variants
+      consequence.py     # CDS/codon/protein annotation (c. / p.)
+      pipeline.py        # per-sample orchestration
+      projectio.py       # save/load project JSON
+      export.py          # CSV export
+    ui/
+      main_window.py, sample_list.py, summary_bar.py, alignment_view.py,
+      trace_view.py, variant_table.py, qc_panel.py, workers.py, theme.py
+  scripts/
+    make_demo_data.py    # synthetic AB1/SEQ/reference generator (ABIF writer)
+  demo/                  # generated demo dataset
+  tests/                 # pytest: parsers, trim, align, consensus, consequence
+```
 
-* Use **TypeScript** rather than loose JavaScript.
-* Separate modules:
+## 11. Implementation constraints
 
-  * `abif-parser`
-  * `seq-parser`
-  * `fasta-parser`
-  * `genbank-parser`
-  * `alignment-worker`
-  * `variant-caller`
-  * `consequence-annotator`
-  * `trace-renderer`
-  * `project-store`
 * Never send sequence data over the network.
-* Perform expensive alignment in Web Workers.
+* Perform alignment and analysis off the UI thread.
 * Normalize everything to **reference coordinates**.
 * Preserve the raw chromatogram separately from derived calls.
 * Make every variant visually auditable against the trace.
-* Do not silently overwrite imported `.seq` calls with re-derived AB1 calls; retain both and expose disagreements.
+* Do not silently overwrite imported `.seq` calls with re-derived AB1 calls; retain both and
+  expose disagreements.
 * Optimize primarily for **fast human review**, not maximal automated variant calling.
 
-The key design change from the attached software would be: **keep its information density available, but use progressive disclosure**. The default screen should immediately answer *“where are the differences, do forward/reverse support them, and what do the peaks actually look like?”* Everything else can sit behind expandable QC/details panels.
-
-For anything intended to inform actual clinical decisions, the variant-calling/QC rules would need formal validation beyond simply implementing the software correctly.
-
+For anything intended to inform actual clinical decisions, the variant-calling/QC rules would
+need formal validation beyond simply implementing the software correctly.

@@ -57,9 +57,24 @@ def test_desktop_demo_analysis_and_screenshot(demo_dir, tmp_path):
     _wait_until(app, lambda: window._pending == 0)
     assert window.project.wt_control is not None
     assert len(window.project.wt_control.reads) == 1
+    window._select_sample("Sample001")
+    app.processEvents()
+    visible_traces = [trace for trace in window.trace_views if trace.read is not None]
+    assert len(visible_traces) == 3
     sample1 = window.project.sample_by_key("Sample001")
     assert sample1 is not None
     assert any(v.control_status == "absent" for v in sample1.variants)
+
+    # A user pan/zoom on one raw-trace x-axis is propagated through reference
+    # coordinates, not raw sample indices, to every other visible trace.
+    source = visible_traces[0]
+    ref_lo, ref_hi = window.cursor_ref - 12, window.cursor_ref + 12
+    source.plot.getViewBox().setXRange(source._ref2x[ref_lo], source._ref2x[ref_hi], padding=0)
+    app.processEvents()
+    synced = [trace.visible_reference_range() for trace in visible_traces]
+    assert all(rng is not None for rng in synced)
+    assert max(rng[0] for rng in synced) - min(rng[0] for rng in synced) < 1.5
+    assert max(rng[1] for rng in synced) - min(rng[1] for rng in synced) < 1.5
 
     shot = tmp_path / "desktop-smoke.png"
     window.request_screenshot(str(shot))

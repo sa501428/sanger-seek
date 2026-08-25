@@ -79,6 +79,17 @@ def test_iupac_ambiguity_is_match():
     assert aln.edit_distance == 0
 
 
+def test_reference_can_align_inside_longer_read_without_overhang_penalty():
+    read = _read("TTTTAAAACC" + REF + "GGAATTTTCC", hint="F")
+    aln = al.orient_and_align(read, REF, Config())
+    assert aln is not None
+    assert aln.orientation == "F"
+    assert aln.edit_distance == 0
+    assert aln.identity == 1.0
+    assert (aln.ref_start, aln.ref_end) == (0, len(REF))
+    assert (aln.read_start, aln.read_end) == (10, 10 + len(REF))
+
+
 def test_python_fallback_matches_edlib():
     query = REF[5:20] + "T" + REF[20:40]
     raw_py = al._py_align(query, REF)

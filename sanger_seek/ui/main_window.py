@@ -63,6 +63,8 @@ class MainWindow(QMainWindow):
         self._screenshot_path: str | None = None
         self.quit_after_screenshot = False
         self.trace_span_bases = 90
+        self._trace_layout_updating = False
+        self._trace_syncing = False
         self.settings = QSettings()
         self.setAcceptDrops(True)
         self.setWindowTitle("Sanger Seek")
@@ -82,15 +84,17 @@ class MainWindow(QMainWindow):
         layout.setSpacing(5)
         self.summary = SummaryBar()
         self.alignment = AlignmentStrip()
-        self.forward_trace = TraceView("Forward chromatogram")
-        self.reverse_trace = TraceView("Reverse chromatogram")
+        self.trace_views = [TraceView(f"Chromatogram {i + 1}") for i in range(4)]
+        # Backward-compatible aliases used by tests and integrations.
+        self.forward_trace = self.trace_views[0]
+        self.reverse_trace = self.trace_views[1]
         self.variants = VariantPanel()
         layout.addWidget(self.summary)
         layout.addWidget(self.alignment)
         traces = QSplitter(Qt.Vertical)
-        traces.addWidget(self.forward_trace)
-        traces.addWidget(self.reverse_trace)
-        traces.setSizes([260, 260])
+        for trace in self.trace_views:
+            traces.addWidget(trace)
+        traces.setSizes([150, 150, 150, 150])
         lower = QSplitter(Qt.Vertical)
         lower.addWidget(traces)
         lower.addWidget(self.variants)
@@ -122,10 +126,12 @@ class MainWindow(QMainWindow):
         self.summary.qcToggled.connect(self.qc_dock.setVisible)
         self.qc_dock.visibilityChanged.connect(self.summary.qc_btn.setChecked)
         self.alignment.cursorRequested.connect(self.set_cursor)
-        self.forward_trace.positionClicked.connect(lambda pos, _read: self.set_cursor(pos))
-        self.reverse_trace.positionClicked.connect(lambda pos, _read: self.set_cursor(pos))
-        self.forward_trace.zoomRequested.connect(self.zoom_traces)
-        self.reverse_trace.zoomRequested.connect(self.zoom_traces)
+        for trace in self.trace_views:
+            trace.positionClicked.connect(lambda pos, _read: self.set_cursor(pos))
+            trace.zoomRequested.connect(self.zoom_traces)
+            trace.referenceRangeChanged.connect(
+                lambda lo, hi, source=trace: self._sync_trace_range(source, lo, hi)
+            )
         self.variants.variantSelected.connect(self._select_variant)
         self.variants.exportRequested.connect(self.export_visible)
 
@@ -398,14 +404,40 @@ class MainWindow(QMainWindow):
             return self.project.wt_control
         return self.project.sample_by_key(key)
 
-    def _display_reads(self) -> tuple[Read | None, Read | None]:
+    @staticmethod
+    def _ordered_trace_reads(sample: Sample | None) -> list[Read]:
+        if sample is None:
+            return []
+        return sorted(
+            (read for read in sample.reads if read.trace is not None),
+            key=lambda read: ({"F": 0, "R": 1}.get(read.orientation, 2), read.label.lower()),
+        )
+
+    def _display_reads(self) -> list[tuple[str, Read]]:
         if self.current_sample is None:
-            return None, None
-        fwd = self.current_sample.forward_reads
-        rev = self.current_sample.reverse_reads
-        first = fwd[0] if fwd else (self.current_sample.reads[0] if self.current_sample.reads else None)
-        second = rev[0] if rev else next((r for r in self.current_sample.reads if r is not first), None)
-        return first, second
+            return []
+
+        def titled(role: str, reads: list[Read]) -> list[tuple[str, Read]]:
+            return [
+                (f"{role} {'Forward' if r.orientation == 'F' else 'Reverse' if r.orientation == 'R' else 'Read'}", r)
+                for r in reads
+            ]
+
+        sample_reads = self._ordered_trace_reads(self.current_sample)
+        control = self.project.wt_control
+        if control is None or self.current_sample is control:
+            role = "WT" if self.current_sample is control else self.current_sample.name
+            return titled(role, sample_reads[:4])
+
+        control_reads = self._ordered_trace_reads(control)
+        selected_control = control_reads[:2]
+        selected_sample = sample_reads[:2]
+        display = titled("WT", selected_control) + titled(self.current_sample.name, selected_sample)
+        if len(display) < 4:
+            display += titled(self.current_sample.name, sample_reads[2 : 2 + (4 - len(display))])
+        if len(display) < 4:
+            display += titled("WT", control_reads[2 : 2 + (4 - len(display))])
+        return display[:4]
 
     def _update_ui(self) -> None:
         sample = self.current_sample
@@ -413,12 +445,24 @@ class MainWindow(QMainWindow):
         self.summary.update_summary(sample, ref, self.project.wt_control)
         self.alignment.set_data(ref, sample)
         self.alignment.set_cursor(self.cursor_ref)
-        first, second = self._display_reads()
-        self.forward_trace.set_read(first, ref)
-        self.reverse_trace.set_read(second, ref)
         variants = sample.variants if sample else []
-        self.forward_trace.set_variants(variants)
-        self.reverse_trace.set_variants(variants)
+        display_reads = self._display_reads()
+        self._trace_layout_updating = True
+        try:
+            for i, trace in enumerate(self.trace_views):
+                if i < len(display_reads):
+                    title, read = display_reads[i]
+                    trace.set_title(title)
+                    trace.set_read(read, ref)
+                    trace.set_variants(variants)
+                    trace.show()
+                else:
+                    trace.set_title(f"Chromatogram {i + 1}")
+                    trace.set_read(None, ref)
+                    trace.set_variants([])
+                    trace.hide()
+        finally:
+            self._trace_layout_updating = False
         self.variants.set_variants(variants)
         self.qc.set_data(sample, self.cursor_ref)
         self.set_cursor(self.cursor_ref, center=False)
@@ -440,11 +484,13 @@ class MainWindow(QMainWindow):
         self.cursor_ref = max(0, min(ref.n - 1, refpos))
         self.alignment.set_cursor(self.cursor_ref)
         if center:
-            self.forward_trace.center_on_ref(self.cursor_ref, self.trace_span_bases)
-            self.reverse_trace.center_on_ref(self.cursor_ref, self.trace_span_bases)
+            for trace in self.trace_views:
+                if trace.isVisible():
+                    trace.center_on_ref(self.cursor_ref, self.trace_span_bases)
         else:
-            self.forward_trace.set_cursor_ref(self.cursor_ref)
-            self.reverse_trace.set_cursor_ref(self.cursor_ref)
+            for trace in self.trace_views:
+                if trace.isVisible():
+                    trace.set_cursor_ref(self.cursor_ref)
         self.qc.set_data(self.current_sample, self.cursor_ref)
 
     def move_cursor(self, delta: int) -> None:
@@ -452,12 +498,31 @@ class MainWindow(QMainWindow):
 
     def zoom_traces(self, factor: float) -> None:
         if factor == 0:
-            self.forward_trace.fit_all()
-            self.reverse_trace.fit_all()
+            if self.project.reference is not None:
+                for trace in self.trace_views:
+                    if trace.isVisible():
+                        trace.set_reference_range(0, self.project.reference.n - 1)
+            else:
+                for trace in self.trace_views:
+                    if trace.isVisible():
+                        trace.fit_all()
             return
         self.trace_span_bases = max(5, min(2000, int(self.trace_span_bases * factor)))
-        self.forward_trace.center_on_ref(self.cursor_ref, self.trace_span_bases)
-        self.reverse_trace.center_on_ref(self.cursor_ref, self.trace_span_bases)
+        for trace in self.trace_views:
+            if trace.isVisible():
+                trace.center_on_ref(self.cursor_ref, self.trace_span_bases)
+
+    def _sync_trace_range(self, source: TraceView, ref_lo: float, ref_hi: float) -> None:
+        if self._trace_layout_updating or self._trace_syncing:
+            return
+        self._trace_syncing = True
+        try:
+            self.trace_span_bases = max(5, min(2000, int(round(ref_hi - ref_lo))))
+            for trace in self.trace_views:
+                if trace is not source and trace.isVisible():
+                    trace.set_reference_range(ref_lo, ref_hi)
+        finally:
+            self._trace_syncing = False
 
     def _select_variant(self, variant: Variant) -> None:
         self.set_cursor(variant.ref_pos, center=True)

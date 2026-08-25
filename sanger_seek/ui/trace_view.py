@@ -78,6 +78,7 @@ class TraceView(QWidget):
     positionClicked = Signal(int, object)   # refpos (or -1), read
     rangeChanged = Signal()
     zoomRequested = Signal(float)           # <1 in, >1 out, 0 fit
+    referenceRangeChanged = Signal(float, float)
 
     def __init__(self, title: str, parent=None):
         super().__init__(parent)
@@ -92,6 +93,7 @@ class TraceView(QWidget):
         self._ymax = 1.0
         self._labels: list[pg.TextItem] = []
         self._marker_items: list = []
+        self._applying_reference_range = False
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -156,12 +158,15 @@ class TraceView(QWidget):
         self._relabel_timer.setSingleShot(True)
         self._relabel_timer.setInterval(25)
         self._relabel_timer.timeout.connect(self._update_base_labels)
-        self.plot.getViewBox().sigXRangeChanged.connect(
-            lambda *_: (self._relabel_timer.start(), self.rangeChanged.emit())
-        )
+        self.plot.getViewBox().sigXRangeChanged.connect(self._on_x_range_changed)
         self.plot.scene().sigMouseClicked.connect(self._on_click)
 
     # ------------------------------------------------------------------ data
+
+    def set_title(self, title: str) -> None:
+        self._title = title
+        if self.read is None:
+            self.header.setText(title)
 
     def set_read(self, read: Read | None, reference: Reference | None) -> None:
         self.read = read
@@ -174,6 +179,10 @@ class TraceView(QWidget):
         self.qual_bars.clear()
 
         if read is None or read.trace is None:
+            self._xs = np.zeros(0)
+            self._refs = np.zeros(0, dtype=np.int64)
+            self._ref2x.clear()
+            self.axis.set_mapping(self._xs, self._refs)
             self.plot.hide()
             self.empty.setText(
                 "No trace"
@@ -378,6 +387,50 @@ class TraceView(QWidget):
         if self.read is None or self.read.trace is None:
             return
         self.plot.getViewBox().setXRange(0, self.read.trace.n_samples, padding=0.01)
+
+    def visible_reference_range(self) -> tuple[float, float] | None:
+        """Current horizontal viewport expressed in reference coordinates."""
+        valid = self._refs >= 0
+        if not valid.any():
+            return None
+        xs = self._xs[valid]
+        refs = self._refs[valid].astype(np.float64)
+        (x0, x1), _ = self.plot.getViewBox().viewRange()
+        lo = float(np.interp(x0, xs, refs))
+        hi = float(np.interp(x1, xs, refs))
+        return (min(lo, hi), max(lo, hi))
+
+    def set_reference_range(self, ref_lo: float, ref_hi: float) -> None:
+        """Apply a viewport from another read using reference coordinates."""
+        valid = self._refs >= 0
+        if not valid.any() or ref_hi <= ref_lo:
+            return
+        xs = self._xs[valid]
+        refs = self._refs[valid].astype(np.float64)
+        # Alignment coordinates are monotonic, but deletions can make them
+        # non-contiguous. np.interp provides the desired fractional mapping.
+        unique_refs, unique_idx = np.unique(refs, return_index=True)
+        unique_xs = xs[unique_idx]
+        x0 = float(np.interp(ref_lo, unique_refs, unique_xs))
+        x1 = float(np.interp(ref_hi, unique_refs, unique_xs))
+        spacing = float(np.median(np.diff(xs))) if len(xs) > 1 else 1.0
+        if x1 - x0 < spacing * 5:
+            mid = (x0 + x1) / 2
+            x0, x1 = mid - spacing * 2.5, mid + spacing * 2.5
+        self._applying_reference_range = True
+        try:
+            self.plot.getViewBox().setXRange(x0, x1, padding=0)
+        finally:
+            self._applying_reference_range = False
+
+    def _on_x_range_changed(self, *_args) -> None:
+        self._relabel_timer.start()
+        self.rangeChanged.emit()
+        if self._applying_reference_range:
+            return
+        ref_range = self.visible_reference_range()
+        if ref_range is not None:
+            self.referenceRangeChanged.emit(*ref_range)
 
     def _nearest_x(self, refpos: int) -> float | None:
         if refpos in self._ref2x:

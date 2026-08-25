@@ -35,7 +35,10 @@ suffix are detected from their `LOCUS` header. Plain `.seq` references are seque
 GenBank references retain CDS annotations and enable coding/protein consequences.
 
 Chromatograms support trackpad/mouse-wheel zoom, visible `+`, `−`, and **Fit** controls, and
-synchronized keyboard shortcuts: `⌘+`, `⌘−`, and `⌘0`.
+synchronized keyboard shortcuts: `⌘+`, `⌘−`, and `⌘0`. Up to four chromatograms are shown at
+once—normally WT forward/reverse and assessed-sample forward/reverse. Zooming or horizontally
+dragging any trace synchronizes every visible trace through reference coordinates, even when
+their underlying AB1 sample positions and trace lengths differ.
 
 ## macOS application and DMG
 

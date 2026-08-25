@@ -248,13 +248,50 @@ def orient_and_align(read: Read, ref_seq: str, cfg: Config) -> ReadAlignment | N
 
     for orientation in order:
         query, win_start = windows[orientation]
-        raw = align_infix(query, ref_seq)
+        raw, query_offset, aligned_query_len = _align_read_window(query, ref_seq)
         if raw is None:
             continue
         if raw.edit_distance / max(len(query), 1) > cfg.max_align_frac_dist:
             continue
-        return _build_alignment(raw, orientation, win_start, len(query), n, len(ref_seq))
+        return _build_alignment(
+            raw,
+            orientation,
+            win_start + query_offset,
+            aligned_query_len,
+            n,
+            len(ref_seq),
+        )
     return None
+
+
+def _align_read_window(
+    query: str, ref_seq: str
+) -> tuple[RawAlignment | None, int, int]:
+    """Align either sequence as the contained interval.
+
+    Amplicon references are often shorter than the chromatogram because the
+    read includes primer or flanking sequence. In that case, align the
+    reference inside the read, invert the operation path, and clip the read
+    overhangs instead of reporting them as giant insertions.
+    """
+    if len(query) <= len(ref_seq):
+        return align_infix(query, ref_seq), 0, len(query)
+    swapped = align_infix(ref_seq, query)
+    if swapped is None:
+        return None, 0, 0
+    inverse = [
+        ("D" if op == "I" else "I" if op == "D" else op, length)
+        for op, length in swapped.ops
+    ]
+    raw = RawAlignment(
+        edit_distance=swapped.edit_distance,
+        ref_start=0,
+        ref_end=len(ref_seq),
+        ops=inverse,
+    )
+    query_offset = swapped.ref_start
+    aligned_query_len = swapped.ref_end - swapped.ref_start
+    return raw, query_offset, aligned_query_len
 
 
 def _build_alignment(

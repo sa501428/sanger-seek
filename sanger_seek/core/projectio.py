@@ -17,28 +17,29 @@ FORMAT_VERSION = 1
 
 
 def save_project(project: Project, path: str | Path) -> None:
+    def sample_doc(s: Sample) -> dict:
+        return {
+            "key": s.key,
+            "name": s.name,
+            "reads": [
+                {
+                    "id": r.id,
+                    "label": r.label,
+                    "ab1": r.ab1_path,
+                    "seq": r.seq_path,
+                    "hint": r.orientation_hint,
+                }
+                for r in s.reads
+            ],
+        }
+
     doc = {
         "format": "sanger-seek-project",
         "version": FORMAT_VERSION,
         "reference": project.reference.path if project.reference else None,
         "config": dataclasses.asdict(project.config),
-        "samples": [
-            {
-                "key": s.key,
-                "name": s.name,
-                "reads": [
-                    {
-                        "id": r.id,
-                        "label": r.label,
-                        "ab1": r.ab1_path,
-                        "seq": r.seq_path,
-                        "hint": r.orientation_hint,
-                    }
-                    for r in s.reads
-                ],
-            }
-            for s in project.samples
-        ],
+        "wt_control": sample_doc(project.wt_control) if project.wt_control else None,
+        "samples": [sample_doc(s) for s in project.samples],
     }
     p = Path(path)
     p.write_text(json.dumps(doc, indent=2))
@@ -69,7 +70,7 @@ def load_project(path: str | Path) -> tuple[Project, list[str]]:
         else:
             warnings.append(f"reference file missing: {ref_path}")
 
-    for sdoc in doc.get("samples", []):
+    def load_sample_doc(sdoc: dict) -> Sample | None:
         sample = Sample(key=sdoc["key"], name=sdoc.get("name", sdoc["key"]))
         for rdoc in sdoc.get("reads", []):
             ab1, seq = rdoc.get("ab1"), rdoc.get("seq")
@@ -90,6 +91,13 @@ def load_project(path: str | Path) -> tuple[Project, list[str]]:
                     orientation_hint=rdoc.get("hint"),
                 )
             )
-        if sample.reads:
+        return sample if sample.reads else None
+
+    control_doc = doc.get("wt_control")
+    if control_doc:
+        project.wt_control = load_sample_doc(control_doc)
+    for sdoc in doc.get("samples", []):
+        sample = load_sample_doc(sdoc)
+        if sample:
             project.samples.append(sample)
     return project, warnings

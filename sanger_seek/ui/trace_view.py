@@ -11,7 +11,7 @@ import numpy as np
 import pyqtgraph as pg
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QFont
-from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QToolButton, QVBoxLayout, QWidget
 
 from ..core.dna import complement, revcomp
 from ..core.model import Read, Reference, Variant
@@ -77,6 +77,7 @@ class RefAxis(pg.AxisItem):
 class TraceView(QWidget):
     positionClicked = Signal(int, object)   # refpos (or -1), read
     rangeChanged = Signal()
+    zoomRequested = Signal(float)           # <1 in, >1 out, 0 fit
 
     def __init__(self, title: str, parent=None):
         super().__init__(parent)
@@ -95,9 +96,22 @@ class TraceView(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(2)
+        header_row = QHBoxLayout()
+        header_row.setContentsMargins(0, 0, 0, 0)
         self.header = QLabel(title)
         self.header.setStyleSheet("font-weight: 600; color: #495057; padding: 1px 4px;")
-        layout.addWidget(self.header)
+        header_row.addWidget(self.header, 1)
+        for text, tip, factor in (
+            ("−", "Zoom out", 1.5),
+            ("+", "Zoom in", 0.67),
+            ("Fit", "Fit the complete chromatogram", 0.0),
+        ):
+            button = QToolButton()
+            button.setText(text)
+            button.setToolTip(f"{tip}; mouse wheel also zooms")
+            button.clicked.connect(lambda _checked=False, f=factor: self.zoomRequested.emit(f))
+            header_row.addWidget(button)
+        layout.addLayout(header_row)
 
         self.axis = RefAxis()
         self.plot = pg.PlotWidget(axisItems={"bottom": self.axis})
@@ -201,6 +215,10 @@ class TraceView(QWidget):
         vb = self.plot.getViewBox()
         vb.setLimits(xMin=0, xMax=S, yMin=0, yMax=self._ymax)
         self.plot.setYRange(0, self._ymax, padding=0)
+        if len(self._xs) > 1:
+            mid = float(self._xs[len(self._xs) // 2])
+            spacing = float(np.median(np.diff(self._xs)))
+            vb.setXRange(mid - 45 * spacing, mid + 45 * spacing, padding=0)
 
         self._build_quality_bars()
         self._describe_header()
@@ -340,6 +358,26 @@ class TraceView(QWidget):
         (x0, x1), _ = vb.viewRange()
         if not (x0 <= x <= x1):
             vb.setXRange(x - (x1 - x0) / 2, x + (x1 - x0) / 2, padding=0)
+
+    def zoom(self, factor: float) -> None:
+        """Zoom horizontally around the cursor or current view center."""
+        if self.read is None or self.read.trace is None:
+            return
+        if factor == 0:
+            self.fit_all()
+            return
+        vb = self.plot.getViewBox()
+        (x0, x1), _ = vb.viewRange()
+        center = float(self.cursor_line.value()) if self.cursor_line.isVisible() else (x0 + x1) / 2
+        current = x1 - x0
+        spacing = float(np.median(np.diff(self._xs))) if len(self._xs) > 1 else 1.0
+        span = min(max(current * factor, spacing * 5), max(self.read.trace.n_samples, spacing * 5))
+        vb.setXRange(center - span / 2, center + span / 2, padding=0)
+
+    def fit_all(self) -> None:
+        if self.read is None or self.read.trace is None:
+            return
+        self.plot.getViewBox().setXRange(0, self.read.trace.n_samples, padding=0.01)
 
     def _nearest_x(self, refpos: int) -> float | None:
         if refpos in self._ref2x:

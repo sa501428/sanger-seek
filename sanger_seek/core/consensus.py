@@ -36,6 +36,34 @@ def call_sample_variants(sample: Sample, ref_seq: str, cfg: Config) -> list[Vari
     return variants
 
 
+def compare_sample_to_control(sample: Sample, control: Sample | None) -> None:
+    """Label sample variants according to an independently aligned WT control."""
+    if control is None or not control.analyzed:
+        for variant in sample.variants:
+            variant.control_status = "unavailable"
+        return
+    control_keys = {
+        (v.kind, v.ref_pos, v.ref_bases, v.alt_bases) for v in control.variants
+    }
+    for variant in sample.variants:
+        key = (variant.kind, variant.ref_pos, variant.ref_bases, variant.alt_bases)
+        if key in control_keys:
+            variant.control_status = "present"
+            continue
+        covered = False
+        for read in control.reads:
+            aln = read.alignment
+            if aln is None:
+                continue
+            if variant.kind == "ins":
+                covered = aln.ref_start <= variant.ref_pos - 1 and variant.ref_pos < aln.ref_end
+            else:
+                covered = aln.ref_start <= variant.ref_pos < aln.ref_end
+            if covered:
+                break
+        variant.control_status = "absent" if covered else "not-covered"
+
+
 def _evidence_for(
     read: Read,
     key: CandidateKey,

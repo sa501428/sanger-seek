@@ -9,6 +9,7 @@ from Bio import SeqIO
 
 from .dna import complement
 from .model import CDSFeature, Reference
+from .seqfile import load_seq
 
 GENBANK_EXTS = {".gb", ".gbk", ".genbank", ".gbff"}
 FASTA_EXTS = {".fa", ".fasta", ".fna", ".ffn", ".txt"}
@@ -61,7 +62,17 @@ def _cds_from_feature(feature, genome: str) -> CDSFeature:
 
 def load_reference(path: str | Path) -> Reference:
     p = Path(path)
-    fmt = "genbank" if p.suffix.lower() in GENBANK_EXTS else "fasta"
+    if p.suffix.lower() == ".seq":
+        # Some GenBank exports retain the generic .seq extension. Sniff the
+        # record header before treating it as plain base-call text.
+        if not p.read_text(errors="replace").lstrip().startswith("LOCUS"):
+            seq = load_seq(p)
+            if not seq:
+                raise ValueError(f"{p.name}: empty reference sequence")
+            return Reference(name=p.stem, seq=seq, path=str(p), source="seq")
+        fmt = "genbank"
+    else:
+        fmt = "genbank" if p.suffix.lower() in GENBANK_EXTS else "fasta"
     records = list(SeqIO.parse(str(p), fmt))
     if not records:
         raise ValueError(f"{p.name}: no sequence records found")

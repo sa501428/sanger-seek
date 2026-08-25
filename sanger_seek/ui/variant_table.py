@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
 from ..core.model import Variant
 from .theme import CONFIDENCE_BG, CONFIDENCE_COLORS
 
-COLUMNS = ["Variant", "Protein", "Effect", "Fwd", "Rev", "Trace", "Confidence", "Mix"]
+COLUMNS = ["Variant", "Protein", "Effect", "Fwd", "Rev", "WT", "Trace", "Confidence", "Mix"]
 
 FILTERS = [
     ("All differences", lambda v: True),
@@ -33,6 +33,7 @@ FILTERS = [
     ("Indels", lambda v: v.kind in ("ins", "del")),
     ("Mixed peaks", lambda v: v.mixed),
     ("Strand disagreement", lambda v: v.strand_status == "discordant"),
+    ("Not present in WT", lambda v: v.control_status in ("absent", "unavailable")),
     ("Needs review", lambda v: v.confidence in ("review", "low")),
 ]
 
@@ -87,10 +88,17 @@ class VariantModel(QAbstractTableModel):
             if col == 4:
                 return strand_mark(v, "R")
             if col == 5:
-                return v.trace_quality.capitalize()
+                return {
+                    "present": "Present",
+                    "absent": "Absent",
+                    "not-covered": "No coverage",
+                    "unavailable": "—",
+                }.get(v.control_status, v.control_status)
             if col == 6:
-                return v.confidence.capitalize()
+                return v.trace_quality.capitalize()
             if col == 7:
+                return v.confidence.capitalize()
+            if col == 8:
                 if v.mixed and v.alt_fraction is not None:
                     ref_disp = v.ref_bases or "·"
                     return f"{ref_disp} {100 - v.alt_fraction * 100:.0f}% / {v.alt_bases or '·'} {v.alt_fraction * 100:.0f}%"
@@ -99,7 +107,7 @@ class VariantModel(QAbstractTableModel):
             return Qt.AlignCenter
         if role == Qt.BackgroundRole:
             return QBrush(QColor(CONFIDENCE_BG.get(v.confidence, "#ffffff")))
-        if role == Qt.ForegroundRole and col == 6:
+        if role == Qt.ForegroundRole and col == 7:
             return QBrush(QColor(CONFIDENCE_COLORS.get(v.confidence, "#212529")))
         if role == Qt.ToolTipRole:
             return self._tooltip(v)
@@ -111,6 +119,7 @@ class VariantModel(QAbstractTableModel):
         if v.gene:
             lines.append(f"gene: {v.gene}")
         lines.append(f"strand status: {v.strand_status}")
+        lines.append(f"WT control: {v.control_status}")
         for e in v.evidence:
             if not e.covered:
                 lines.append(f"{e.read_label}: not covered")
@@ -164,6 +173,7 @@ class VariantPanel(QWidget):
         self.filter_box.currentIndexChanged.connect(self._on_filter)
         top.addWidget(self.filter_box)
         self.count_label = QLabel("")
+        self.count_label.setMinimumWidth(42)
         self.count_label.setStyleSheet("color: #868e96;")
         top.addWidget(self.count_label)
         top.addStretch(1)

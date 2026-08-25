@@ -30,8 +30,9 @@ class SummaryBar(QWidget):
         self.ref_chip = _chip("no reference")
         self.reads_chip = _chip("0 reads")
         self.var_chip = _chip("–")
+        self.control_chip = _chip("WT: not loaded")
         self.disc_chip = _chip("")
-        for c in (self.ref_chip, self.reads_chip, self.var_chip, self.disc_chip):
+        for c in (self.ref_chip, self.control_chip, self.reads_chip, self.var_chip, self.disc_chip):
             layout.addWidget(c)
         self.disc_chip.hide()
 
@@ -41,7 +42,9 @@ class SummaryBar(QWidget):
         self.qc_btn.toggled.connect(self.qcToggled.emit)
         layout.addWidget(self.qc_btn)
 
-    def update_summary(self, sample: Sample | None, reference: Reference | None) -> None:
+    def update_summary(
+        self, sample: Sample | None, reference: Reference | None, control: Sample | None = None
+    ) -> None:
         if reference is not None:
             gene = reference.cds[0].gene if reference.cds else None
             self.ref_chip.setText(
@@ -49,6 +52,13 @@ class SummaryBar(QWidget):
             )
         else:
             self.ref_chip.setText("no reference — load FASTA/GenBank")
+
+        if control is None:
+            self.control_chip.setText("WT: not loaded")
+        elif control.analyzed:
+            self.control_chip.setText(f"WT: {len(control.reads)} contig read(s)")
+        else:
+            self.control_chip.setText("WT: analyzing…")
 
         if sample is None:
             self.sample_label.setText("No sample")

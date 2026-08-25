@@ -126,11 +126,16 @@ def test_export_and_project_roundtrip(analyzed, demo_dir, tmp_path):
     text = csv_path.read_text()
     assert "c.944C>T" in text and "p.Thr315Ile" in text
 
-    project = Project(reference=reference, samples=list(samples.values()))
+    project = Project(
+        reference=reference,
+        wt_control=samples["Sample002"],
+        samples=[samples["Sample001"], samples["Sample003"]],
+    )
     ppath = tmp_path / "demo.sanger-seek.json"
     save_project(project, ppath)
     loaded, warnings = load_project(ppath)
     assert warnings == []
     assert loaded.reference is not None and loaded.reference.name == reference.name
-    assert {s.key for s in loaded.samples} == set(samples)
+    assert loaded.wt_control is not None and loaded.wt_control.key == "Sample002"
+    assert {s.key for s in loaded.samples} == {"Sample001", "Sample003"}
     assert len(loaded.sample_by_key("Sample001").reads) == 2

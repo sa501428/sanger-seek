@@ -1,5 +1,15 @@
 from sanger_seek.core.dna import revcomp
 from sanger_seek.core.reference import load_reference
+
+
+def test_load_seq_as_explicit_reference(tmp_path):
+    path = tmp_path / "wild_type.seq"
+    path.write_text("ACGT ACGT\nNN\n")
+    ref = load_reference(path)
+    assert ref.name == "wild_type"
+    assert ref.seq == "ACGTACGTNN"
+    assert ref.source == "seq"
+    assert ref.cds == []
 from sanger_seek.devtools.demogen import CDS_LEN, UTR5
 
 
@@ -20,6 +30,14 @@ def test_load_genbank_reference(demo_dir):
     assert cds.cds_index(UTR5 - 1) is None
     assert ref.feature_at(UTR5 + 5) is cds
     assert ref.feature_at(10) is None
+
+
+def test_load_genbank_record_with_seq_suffix(demo_dir, tmp_path):
+    path = tmp_path / "exported-reference.seq"
+    path.write_bytes((demo_dir / "SEEK1.gb").read_bytes())
+    ref = load_reference(path)
+    assert ref.source == "genbank"
+    assert len(ref.cds) == 1
 
 
 def test_load_fasta_reference(demo_dir):

@@ -169,6 +169,7 @@ class Variant:
     protein: Optional[str] = None
     effect: Optional[str] = None      # missense/nonsense/synonymous/frameshift/...
     gene: Optional[str] = None
+    control_status: str = "unavailable"  # present | absent | not-covered | unavailable
 
     @property
     def g_label(self) -> str:
@@ -211,7 +212,7 @@ class Reference:
     name: str
     seq: str
     path: str = ""
-    source: str = "fasta"             # 'fasta' | 'genbank'
+    source: str = "fasta"             # 'fasta' | 'genbank' | 'seq'
     cds: list[CDSFeature] = field(default_factory=list)
     description: str = ""
 
@@ -253,6 +254,7 @@ class Sample:
 @dataclass
 class Project:
     reference: Optional[Reference] = None
+    wt_control: Optional[Sample] = None
     samples: list[Sample] = field(default_factory=list)
     config: Config = field(default_factory=Config)
     path: str = ""

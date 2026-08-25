@@ -24,8 +24,18 @@ You can also open a folder or files directly:
 .venv/bin/sanger-seek --project review.sanger-seek.json
 ```
 
-The application accepts `.ab1`/`.abi`, `.seq`, FASTA, and GenBank files. A GenBank reference
-enables coding and protein consequence annotation.
+The application accepts `.ab1`/`.abi`, `.seq`, FASTA, and GenBank files. Use **Load Reference**
+for the supplied reference, **Load WT Control** for one or more forward/reverse control contigs,
+and **Load Assessed Samples** for the samples under review. Reads are aligned independently to
+the reference and sample variants are labeled according to whether the same allele is present
+in the WT control.
+
+An explicitly selected `.seq` file can be the reference. GenBank records saved with a `.seq`
+suffix are detected from their `LOCUS` header. Plain `.seq` references are sequence-only;
+GenBank references retain CDS annotations and enable coding/protein consequences.
+
+Chromatograms support trackpad/mouse-wheel zoom, visible `+`, `−`, and **Fit** controls, and
+synchronized keyboard shortcuts: `⌘+`, `⌘−`, and `⌘0`.
 
 ## macOS application and DMG
 

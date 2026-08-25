@@ -43,6 +43,24 @@ def test_desktop_demo_analysis_and_screenshot(demo_dir, tmp_path):
     assert window.cursor_ref == first.ref_pos
     assert window.qc.table.rowCount() == len(window.current_sample.reads)
 
+    before = window.forward_trace.plot.getViewBox().viewRange()[0]
+    window.zoom_traces(0.67)
+    app.processEvents()
+    after = window.forward_trace.plot.getViewBox().viewRange()[0]
+    assert after[1] - after[0] < before[1] - before[0]
+
+    control_files = [
+        str(demo_dir / "Sample002_F.ab1"),
+        str(demo_dir / "Sample002_F.seq"),
+    ]
+    window.add_control_paths(control_files)
+    _wait_until(app, lambda: window._pending == 0)
+    assert window.project.wt_control is not None
+    assert len(window.project.wt_control.reads) == 1
+    sample1 = window.project.sample_by_key("Sample001")
+    assert sample1 is not None
+    assert any(v.control_status == "absent" for v in sample1.variants)
+
     shot = tmp_path / "desktop-smoke.png"
     window.request_screenshot(str(shot))
     _wait_until(app, shot.exists)

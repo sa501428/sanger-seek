@@ -21,9 +21,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ..core.consensus import compare_sample_to_control
 from ..core.export import export_variants_csv
 from ..core.model import Project, Read, Sample, Variant
-from ..core.pipeline import load_project_inputs
+from ..core.pairing import scan_paths
+from ..core.pipeline import build_samples_from_scan, load_project_inputs
 from ..core.projectio import load_project, save_project
 from ..core.reference import load_reference
 from ..devtools.demogen import generate_demo
@@ -38,6 +40,8 @@ from .workers import AnalyzeJob
 
 PROJECT_FILTER = "Sanger Seek projects (*.sanger-seek.json *.json)"
 INPUT_FILTER = "Sanger data (*.ab1 *.abi *.ab *.seq *.fa *.fasta *.fna *.ffn *.gb *.gbk *.genbank *.gbff)"
+READ_FILTER = "Sanger reads (*.ab1 *.abi *.ab *.seq)"
+REFERENCE_FILTER = "Reference sequence (*.gb *.gbk *.genbank *.gbff *.fa *.fasta *.fna *.ffn *.seq)"
 
 
 class MainWindow(QMainWindow):
@@ -58,6 +62,7 @@ class MainWindow(QMainWindow):
         self._dirty = False
         self._screenshot_path: str | None = None
         self.quit_after_screenshot = False
+        self.trace_span_bases = 90
         self.settings = QSettings()
         self.setAcceptDrops(True)
         self.setWindowTitle("Sanger Seek")
@@ -97,6 +102,7 @@ class MainWindow(QMainWindow):
         self.sample_list.setSelectionMode(QAbstractItemView.SingleSelection)
         self.samples_dock = QDockWidget("Samples", self)
         self.samples_dock.setObjectName("samplesDock")
+        self.samples_dock.setMinimumWidth(240)
         self.samples_dock.setWidget(self.sample_list)
         self.addDockWidget(Qt.LeftDockWidgetArea, self.samples_dock)
 
@@ -118,6 +124,8 @@ class MainWindow(QMainWindow):
         self.alignment.cursorRequested.connect(self.set_cursor)
         self.forward_trace.positionClicked.connect(lambda pos, _read: self.set_cursor(pos))
         self.reverse_trace.positionClicked.connect(lambda pos, _read: self.set_cursor(pos))
+        self.forward_trace.zoomRequested.connect(self.zoom_traces)
+        self.reverse_trace.zoomRequested.connect(self.zoom_traces)
         self.variants.variantSelected.connect(self._select_variant)
         self.variants.exportRequested.connect(self.export_visible)
 
@@ -129,8 +137,11 @@ class MainWindow(QMainWindow):
         return action
 
     def _build_actions(self) -> None:
-        self.open_folder_action = self._action("Open Folder…", self.open_folder, QKeySequence.Open)
-        self.add_files_action = self._action("Add Files…", self.add_files, "Ctrl+Shift+O")
+        self.reference_action = self._action("Load Reference…", self.open_reference, "Ctrl+R")
+        self.open_folder_action = self._action("Load Assessed Sample Folder…", self.open_folder, QKeySequence.Open)
+        self.add_files_action = self._action("Add Assessed Sample Reads…", self.add_files, "Ctrl+Shift+O")
+        self.control_files_action = self._action("Load WT Control Reads…", self.add_control_files, "Ctrl+Shift+W")
+        self.control_folder_action = self._action("Load WT Control Folder…", self.add_control_folder)
         self.open_project_action = self._action("Open Project…", self.open_project, "Ctrl+Alt+O")
         self.save_action = self._action("Save Project", self.save, QKeySequence.Save)
         self.save_as_action = self._action("Save Project As…", self.save_as, QKeySequence.SaveAs)
@@ -141,10 +152,16 @@ class MainWindow(QMainWindow):
         self.next_base_action = self._action("Next Base", lambda: self.move_cursor(1), Qt.Key_Right)
         self.prev_variant_action = self._action("Previous Variant", lambda: self.move_variant(-1), "Shift+Ctrl+Left")
         self.next_variant_action = self._action("Next Variant", lambda: self.move_variant(1), "Shift+Ctrl+Right")
+        self.zoom_in_action = self._action("Zoom In", lambda: self.zoom_traces(0.67), QKeySequence.ZoomIn)
+        self.zoom_out_action = self._action("Zoom Out", lambda: self.zoom_traces(1.5), QKeySequence.ZoomOut)
+        self.zoom_fit_action = self._action("Fit Chromatograms", lambda: self.zoom_traces(0), "Ctrl+0")
         self.about_action = self._action("About Sanger Seek", self.about)
 
         file_menu = self.menuBar().addMenu("File")
+        file_menu.addAction(self.reference_action)
+        file_menu.addSeparator()
         for action in (
+            self.control_files_action, self.control_folder_action,
             self.open_folder_action, self.add_files_action, self.open_project_action,
             self.save_action, self.save_as_action, self.export_action,
         ):
@@ -160,6 +177,10 @@ class MainWindow(QMainWindow):
         for action in (self.prev_base_action, self.next_base_action, self.prev_variant_action, self.next_variant_action):
             navigate.addAction(action)
         view = self.menuBar().addMenu("View")
+        view.addAction(self.zoom_in_action)
+        view.addAction(self.zoom_out_action)
+        view.addAction(self.zoom_fit_action)
+        view.addSeparator()
         view.addAction(self.samples_dock.toggleViewAction())
         view.addAction(self.qc_dock.toggleViewAction())
         help_menu = self.menuBar().addMenu("Help")
@@ -168,7 +189,7 @@ class MainWindow(QMainWindow):
         toolbar = QToolBar("Main", self)
         toolbar.setObjectName("mainToolbar")
         toolbar.setMovable(False)
-        for action in (self.open_folder_action, self.add_files_action, self.save_action, self.export_action):
+        for action in (self.reference_action, self.control_files_action, self.open_folder_action, self.add_files_action, self.save_action, self.export_action):
             toolbar.addAction(action)
         toolbar.addSeparator()
         toolbar.addAction(self.prev_variant_action)
@@ -203,12 +224,12 @@ class MainWindow(QMainWindow):
     # --------------------------------------------------------------- loading
 
     def open_folder(self) -> None:
-        path = QFileDialog.getExistingDirectory(self, "Open Sanger data folder", self._start_dir())
+        path = QFileDialog.getExistingDirectory(self, "Load assessed sample folder", self._start_dir())
         if path:
             self.add_paths([path])
 
     def add_files(self) -> None:
-        paths, _ = QFileDialog.getOpenFileNames(self, "Add Sanger data", self._start_dir(), INPUT_FILTER)
+        paths, _ = QFileDialog.getOpenFileNames(self, "Add assessed sample reads", self._start_dir(), READ_FILTER)
         if paths:
             self.add_paths(paths)
 
@@ -230,6 +251,58 @@ class MainWindow(QMainWindow):
             self._begin_analysis()
         except Exception as exc:
             self._show_error("Could not load input", exc)
+
+    def open_reference(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, "Load reference sequence", self._start_dir(), REFERENCE_FILTER)
+        if path:
+            self.load_reference_path(path)
+
+    def load_reference_path(self, path: str) -> None:
+        try:
+            self.project.reference = load_reference(path)
+            self._remember_dir(path)
+            self._dirty = True
+            self._begin_analysis()
+        except Exception as exc:
+            self._show_error("Could not load reference", exc)
+
+    def add_control_files(self) -> None:
+        paths, _ = QFileDialog.getOpenFileNames(self, "Load WT control reads", self._start_dir(), READ_FILTER)
+        if paths:
+            self.add_control_paths(paths)
+
+    def add_control_folder(self) -> None:
+        path = QFileDialog.getExistingDirectory(self, "Load WT control folder", self._start_dir())
+        if path:
+            self.add_control_paths([path])
+
+    def add_control_paths(self, paths: list[str]) -> None:
+        """Load any number of paired or overlapping WT contigs as one control."""
+        try:
+            scan = scan_paths(paths)
+            groups = build_samples_from_scan(scan)
+            reads = [read for group in groups for read in group.reads]
+            if not reads:
+                raise ValueError("No AB1 or read .seq files were found")
+            control = self.project.wt_control or Sample(key="__WT_CONTROL__", name="WT control")
+            known = {(r.ab1_path, r.seq_path) for r in control.reads}
+            for read in reads:
+                if (read.ab1_path, read.seq_path) in known:
+                    continue
+                base_id = f"{control.key}/{read.label.lower()}"
+                read.id = base_id
+                suffix = 2
+                while control.read_by_id(read.id):
+                    read.id = f"{base_id}-{suffix}"
+                    suffix += 1
+                control.reads.append(read)
+            self.project.wt_control = control
+            self.current_sample = control
+            self._remember_dir(paths[0])
+            self._dirty = True
+            self._begin_analysis()
+        except Exception as exc:
+            self._show_error("Could not load WT control", exc)
 
     def open_project(self) -> None:
         if not self._confirm_discard():
@@ -270,7 +343,7 @@ class MainWindow(QMainWindow):
     def _begin_analysis(self) -> None:
         self._generation += 1
         generation = self._generation
-        samples = self.project.samples
+        samples = ([self.project.wt_control] if self.project.wt_control else []) + self.project.samples
         self.sample_list.set_samples(samples, self.current_sample.key if self.current_sample else None)
         self._pending = len(samples)
         self.progress.setRange(0, max(self._pending, 1))
@@ -293,7 +366,7 @@ class MainWindow(QMainWindow):
         self._jobs.pop((generation, key), None)
         if generation != self._generation:
             return
-        sample = self.project.sample_by_key(key)
+        sample = self._sample_by_key(key)
         if sample:
             self.sample_list.refresh_sample(sample)
         self._pending = max(self._pending - 1, 0)
@@ -301,6 +374,8 @@ class MainWindow(QMainWindow):
         if self.current_sample is sample:
             self._update_ui()
         if self._pending == 0:
+            for assessed in self.project.samples:
+                compare_sample_to_control(assessed, self.project.wt_control)
             self.progress.hide()
             self.statusBar().showMessage("Analysis complete" if not error else f"Analysis finished with an error: {error}", 6000)
             if self.current_sample is None and self.project.samples:
@@ -311,12 +386,17 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------- selection
 
     def _select_sample(self, key: str) -> None:
-        self.current_sample = self.project.sample_by_key(key)
+        self.current_sample = self._sample_by_key(key)
         if self.current_sample and self.project.reference:
             aligned = [r.alignment for r in self.current_sample.reads if r.alignment]
             if aligned and not any(a.ref_start <= self.cursor_ref < a.ref_end for a in aligned):
                 self.cursor_ref = min(a.ref_start for a in aligned)
         self._update_ui()
+
+    def _sample_by_key(self, key: str) -> Sample | None:
+        if self.project.wt_control and self.project.wt_control.key == key:
+            return self.project.wt_control
+        return self.project.sample_by_key(key)
 
     def _display_reads(self) -> tuple[Read | None, Read | None]:
         if self.current_sample is None:
@@ -330,7 +410,7 @@ class MainWindow(QMainWindow):
     def _update_ui(self) -> None:
         sample = self.current_sample
         ref = self.project.reference
-        self.summary.update_summary(sample, ref)
+        self.summary.update_summary(sample, ref, self.project.wt_control)
         self.alignment.set_data(ref, sample)
         self.alignment.set_cursor(self.cursor_ref)
         first, second = self._display_reads()
@@ -342,8 +422,8 @@ class MainWindow(QMainWindow):
         self.variants.set_variants(variants)
         self.qc.set_data(sample, self.cursor_ref)
         self.set_cursor(self.cursor_ref, center=False)
-        self.save_action.setEnabled(bool(self.project.samples or ref))
-        self.save_as_action.setEnabled(bool(self.project.samples or ref))
+        self.save_action.setEnabled(bool(self.project.samples or self.project.wt_control or ref))
+        self.save_as_action.setEnabled(bool(self.project.samples or self.project.wt_control or ref))
         self.export_action.setEnabled(bool(variants))
         self.reassign_action.setEnabled(bool(sample and sample.reads))
         title = "Sanger Seek"
@@ -360,8 +440,8 @@ class MainWindow(QMainWindow):
         self.cursor_ref = max(0, min(ref.n - 1, refpos))
         self.alignment.set_cursor(self.cursor_ref)
         if center:
-            self.forward_trace.center_on_ref(self.cursor_ref, 45)
-            self.reverse_trace.center_on_ref(self.cursor_ref, 45)
+            self.forward_trace.center_on_ref(self.cursor_ref, self.trace_span_bases)
+            self.reverse_trace.center_on_ref(self.cursor_ref, self.trace_span_bases)
         else:
             self.forward_trace.set_cursor_ref(self.cursor_ref)
             self.reverse_trace.set_cursor_ref(self.cursor_ref)
@@ -369,6 +449,15 @@ class MainWindow(QMainWindow):
 
     def move_cursor(self, delta: int) -> None:
         self.set_cursor(self.cursor_ref + delta)
+
+    def zoom_traces(self, factor: float) -> None:
+        if factor == 0:
+            self.forward_trace.fit_all()
+            self.reverse_trace.fit_all()
+            return
+        self.trace_span_bases = max(5, min(2000, int(self.trace_span_bases * factor)))
+        self.forward_trace.center_on_ref(self.cursor_ref, self.trace_span_bases)
+        self.reverse_trace.center_on_ref(self.cursor_ref, self.trace_span_bases)
 
     def _select_variant(self, variant: Variant) -> None:
         self.set_cursor(variant.ref_pos, center=True)
@@ -436,7 +525,8 @@ class MainWindow(QMainWindow):
         label, ok = QInputDialog.getItem(self, "Move read", "Read:", labels, 0, False)
         if not ok:
             return
-        targets = [s for s in self.project.samples if s is not source]
+        all_destinations = ([self.project.wt_control] if self.project.wt_control else []) + self.project.samples
+        targets = [s for s in all_destinations if s is not source]
         names = [s.name for s in targets] + ["New sample…"]
         target_name, ok = QInputDialog.getItem(self, "Move read", "Destination sample:", names, 0, False)
         if not ok:
@@ -458,7 +548,10 @@ class MainWindow(QMainWindow):
         read.id = f"{target.key}/{read.label.lower()}"
         target.reads.append(read)
         if not source.reads:
-            self.project.samples.remove(source)
+            if source is self.project.wt_control:
+                self.project.wt_control = None
+            else:
+                self.project.samples.remove(source)
         self.current_sample = target
         self._dirty = True
         self.project.samples.sort(key=lambda s: s.name.lower())

@@ -126,7 +126,47 @@ def read_candidates(read: Read, ref_seq: str, cfg: Config) -> list[ReadCandidate
                     )
                 )
             fc += k
-    return out
+    return _coalesce_split_insertions(out, ref_seq)
+
+
+def _coalesce_split_insertions(
+    candidates: list[ReadCandidate], ref_seq: str
+) -> list[ReadCandidate]:
+    """Repair an equivalent path emitted by simple edit-distance aligners.
+
+    Around repeats, an insertion can be represented as ``I, =, I`` even
+    though it is one contiguous allele.  For example, query ``TCTG`` versus
+    reference ``T`` may be returned as ``ins TC, match T, ins G`` instead of
+    ``match T, ins CTG``.  Rotate the shared reference bases into the inserted
+    allele so edlib and the pure-Python fallback produce the same candidate.
+    """
+    merged: list[ReadCandidate] = []
+    for cand in candidates:
+        if merged and cand.key.kind == "ins" and merged[-1].key.kind == "ins":
+            left = merged[-1]
+            gap_start = left.key.ref_pos
+            gap_end = cand.key.ref_pos
+            if 0 < gap_end - gap_start <= len(left.key.alt_bases):
+                bridge = ref_seq[gap_start:gap_end]
+                if left.key.alt_bases.startswith(bridge):
+                    allele = left.key.alt_bases[len(bridge) :] + bridge + cand.key.alt_bases
+                    quals = [q for q in (left.qual, cand.qual) if q is not None]
+                    merged[-1] = ReadCandidate(
+                        key=CandidateKey("ins", gap_end, "", allele),
+                        call=allele,
+                        mixed=left.mixed or cand.mixed,
+                        oriented_index=left.oriented_index,
+                        qual=min(quals) if quals else None,
+                        ratio=max(
+                            (r for r in (left.ratio, cand.ratio) if r is not None),
+                            default=None,
+                        ),
+                        secondary_base=left.secondary_base or cand.secondary_base,
+                        alt_fraction=left.alt_fraction or cand.alt_fraction,
+                    )
+                    continue
+        merged.append(cand)
+    return merged
 
 
 def _snv_candidate(

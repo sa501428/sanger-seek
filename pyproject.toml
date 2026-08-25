@@ -13,6 +13,7 @@ dependencies = [
 [project.optional-dependencies]
 fast = ["edlib>=1.3"]
 dev = ["pytest>=8"]
+build = ["pyinstaller>=6.11"]
 
 [project.scripts]
 sanger-seek = "sanger_seek.app:main"
@@ -23,6 +24,9 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 include = ["sanger_seek*"]
+
+[tool.setuptools.package-data]
+sanger_seek = ["resources/*.png"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

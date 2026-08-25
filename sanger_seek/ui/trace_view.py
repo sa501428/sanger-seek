@@ -117,8 +117,12 @@ class TraceView(QWidget):
         self.curves = {}
         for b in "GATC":
             c = pg.PlotCurveItem(pen=pg.mkPen(base_color(b), width=1.4))
-            c.setDownsampling(auto=True)
-            c.setClipToView(True)
+            # PlotCurveItem relies on view clipping; setDownsampling exists on
+            # PlotDataItem, but not on PlotCurveItem in pyqtgraph 0.14.
+            if hasattr(c, "setDownsampling"):
+                c.setDownsampling(auto=True)
+            if hasattr(c, "setClipToView"):
+                c.setClipToView(True)
             self.plot.addItem(c)
             self.curves[b] = c
 

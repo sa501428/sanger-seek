@@ -242,8 +242,12 @@ def orient_and_align(read: Read, ref_seq: str, cfg: Config) -> ReadAlignment | N
     }
 
     dists = {o: infix_distance(q, ref_seq) for o, (q, _) in windows.items()}
-    order = sorted(dists, key=lambda o: dists[o])
-    if dists[order[0]] == dists[order[1]] and read.orientation_hint in dists:
+    order = (
+        [read.orientation_override]
+        if read.orientation_override in dists
+        else sorted(dists, key=lambda o: dists[o])
+    )
+    if len(order) > 1 and dists[order[0]] == dists[order[1]] and read.orientation_hint in dists:
         order = [read.orientation_hint] + [o for o in order if o != read.orientation_hint]
 
     for orientation in order:

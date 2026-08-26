@@ -90,6 +90,7 @@ class Read:
     trace: Optional[TraceData] = None
     seq_imported: Optional[str] = None
     orientation_hint: Optional[str] = None
+    orientation_override: Optional[str] = None  # explicit user choice: F | R
 
     # Derived during analysis
     calls: str = ""                   # authoritative calls (PBAS if trace, else .seq)

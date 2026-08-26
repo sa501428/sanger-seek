@@ -131,6 +131,7 @@ def test_export_and_project_roundtrip(analyzed, demo_dir, tmp_path):
         wt_control=samples["Sample002"],
         samples=[samples["Sample001"], samples["Sample003"]],
     )
+    project.samples[0].reads[0].orientation_override = "F"
     ppath = tmp_path / "demo.sanger-seek.json"
     save_project(project, ppath)
     loaded, warnings = load_project(ppath)
@@ -139,3 +140,4 @@ def test_export_and_project_roundtrip(analyzed, demo_dir, tmp_path):
     assert loaded.wt_control is not None and loaded.wt_control.key == "Sample002"
     assert {s.key for s in loaded.samples} == {"Sample001", "Sample003"}
     assert len(loaded.sample_by_key("Sample001").reads) == 2
+    assert loaded.sample_by_key("Sample001").reads[0].orientation_override == "F"

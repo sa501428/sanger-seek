@@ -34,11 +34,16 @@ An explicitly selected `.seq` file can be the reference. GenBank records saved w
 suffix are detected from their `LOCUS` header. Plain `.seq` references are sequence-only;
 GenBank references retain CDS annotations and enable coding/protein consequences.
 
-Chromatograms support trackpad/mouse-wheel zoom, visible `+`, `−`, and **Fit** controls, and
-synchronized keyboard shortcuts: `⌘+`, `⌘−`, and `⌘0`. Up to four chromatograms are shown at
-once—normally WT forward/reverse and assessed-sample forward/reverse. Zooming or horizontally
-dragging any trace synchronizes every visible trace through reference coordinates, even when
-their underlying AB1 sample positions and trace lengths differ.
+Chromatograms support trackpad/mouse-wheel zoom, double-click-to-zoom, visible `+`, `−`, and
+**Fit** controls, and synchronized keyboard shortcuts: `⌘+`, `⌘−`, and `⌘0`. Up to four
+chromatograms are shown at once—normally WT forward/reverse and assessed-sample
+forward/reverse. Zooming or horizontally dragging any trace synchronizes every visible trace
+through reference coordinates. The base pair at the center is the shared anchor, even when
+the underlying AB1 sample positions and trace lengths differ.
+
+Use **Pair / Assign Reads…** (`⌘P`) to override automatic grouping: give matching reads the
+same sample name and explicitly choose Forward or Reverse when filenames or automatic
+orientation are ambiguous. The assignments are saved in the project.
 
 ## macOS application and DMG
 

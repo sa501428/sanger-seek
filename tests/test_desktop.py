@@ -3,10 +3,11 @@
 import os
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QSettings  # noqa: E402
+from PySide6.QtCore import QPointF, QSettings, Qt  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from sanger_seek.app import create_application  # noqa: E402
@@ -75,6 +76,38 @@ def test_desktop_demo_analysis_and_screenshot(demo_dir, tmp_path):
     assert all(rng is not None for rng in synced)
     assert max(rng[0] for rng in synced) - min(rng[0] for rng in synced) < 1.5
     assert max(rng[1] for rng in synced) - min(rng[1] for rng in synced) < 1.5
+    assert window.cursor_ref == round((ref_lo + ref_hi) / 2)
+
+    # Double-clicking a base selects it and requests one 2x synchronized zoom.
+    clicked_ref = window.cursor_ref + 2
+    clicked_scene_pos = source.plot.getViewBox().mapViewToScene(
+        QPointF(source._ref2x[clicked_ref], 0)
+    )
+    before_span = source.visible_reference_range()[1] - source.visible_reference_range()[0]
+    event = SimpleNamespace(
+        button=lambda: Qt.LeftButton,
+        scenePos=lambda: clicked_scene_pos,
+        double=lambda: True,
+    )
+    source._on_click(event)
+    app.processEvents()
+    assert window.cursor_ref == clicked_ref
+    zoomed = [trace.visible_reference_range() for trace in visible_traces]
+    assert all(rng is not None for rng in zoomed)
+    assert source.visible_reference_range()[1] - source.visible_reference_range()[0] < before_span * 0.6
+    assert all(abs((rng[0] + rng[1]) / 2 - clicked_ref) < 1 for rng in zoomed)
+
+    assignments = []
+    for sample in window.project.samples:
+        for read in sample.reads:
+            name = "ManualPair" if sample.key == "Sample001" else sample.name
+            role = "F" if read.label.endswith("_F") else "R" if read.label.endswith("_R") else None
+            assignments.append((read, name, role))
+    window.apply_read_assignments(assignments)
+    _wait_until(app, lambda: window._pending == 0)
+    manual = window.project.sample_by_key("ManualPair")
+    assert manual is not None and len(manual.reads) == 2
+    assert {read.orientation_override for read in manual.reads} == {"F", "R"}
 
     shot = tmp_path / "desktop-smoke.png"
     window.request_screenshot(str(shot))

@@ -90,10 +90,10 @@ def analyze_sample(sample: Sample, reference: Reference | None, cfg: Config) -> 
             if read.alignment is not None:
                 read.orientation = read.alignment.orientation
             else:
-                read.orientation = read.orientation_hint or "?"
+                read.orientation = read.orientation_override or read.orientation_hint or "?"
                 read.error = "read did not align to the reference"
         else:
-            read.orientation = read.orientation_hint or "?"
+            read.orientation = read.orientation_override or read.orientation_hint or "?"
 
     if reference is not None:
         sample.variants = call_sample_variants(sample, reference.seq, cfg)

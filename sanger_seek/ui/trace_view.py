@@ -459,3 +459,6 @@ class TraceView(QWidget):
             i -= 1
         ref = int(self._refs[i]) if i < len(self._refs) else -1
         self.positionClicked.emit(ref, self.read)
+        if ref >= 0 and getattr(ev, "double", lambda: False)():
+            # The main window connects this request to all visible traces.
+            self.zoomRequested.emit(0.5)

@@ -9,6 +9,7 @@ from PySide6.QtGui import QAction, QCloseEvent, QKeySequence
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
+    QDialog,
     QDockWidget,
     QFileDialog,
     QInputDialog,
@@ -30,6 +31,7 @@ from ..core.projectio import load_project, save_project
 from ..core.reference import load_reference
 from ..devtools.demogen import generate_demo
 from .alignment_view import AlignmentStrip
+from .pairing_dialog import PairingDialog
 from .qc_panel import QCPanel
 from .sample_list import SampleList
 from .summary_bar import SummaryBar
@@ -153,6 +155,7 @@ class MainWindow(QMainWindow):
         self.save_as_action = self._action("Save Project As…", self.save_as, QKeySequence.SaveAs)
         self.export_action = self._action("Export Visible Variants…", self.export_visible, "Ctrl+E")
         self.demo_action = self._action("Open Demo", self.open_demo)
+        self.pair_reads_action = self._action("Pair / Assign Reads…", self.edit_read_pairings, "Ctrl+P")
         self.reassign_action = self._action("Move Read to Sample…", self.reassign_read)
         self.prev_base_action = self._action("Previous Base", lambda: self.move_cursor(-1), Qt.Key_Left)
         self.next_base_action = self._action("Next Base", lambda: self.move_cursor(1), Qt.Key_Right)
@@ -178,6 +181,7 @@ class MainWindow(QMainWindow):
         file_menu.addAction(self._action("Close Window", self.close, QKeySequence.Close))
 
         edit_menu = self.menuBar().addMenu("Edit")
+        edit_menu.addAction(self.pair_reads_action)
         edit_menu.addAction(self.reassign_action)
         navigate = self.menuBar().addMenu("Navigate")
         for action in (self.prev_base_action, self.next_base_action, self.prev_variant_action, self.next_variant_action):
@@ -195,7 +199,10 @@ class MainWindow(QMainWindow):
         toolbar = QToolBar("Main", self)
         toolbar.setObjectName("mainToolbar")
         toolbar.setMovable(False)
-        for action in (self.reference_action, self.control_files_action, self.open_folder_action, self.add_files_action, self.save_action, self.export_action):
+        for action in (
+            self.reference_action, self.control_files_action, self.open_folder_action,
+            self.add_files_action, self.pair_reads_action, self.save_action, self.export_action,
+        ):
             toolbar.addAction(action)
         toolbar.addSeparator()
         toolbar.addAction(self.prev_variant_action)
@@ -465,11 +472,14 @@ class MainWindow(QMainWindow):
             self._trace_layout_updating = False
         self.variants.set_variants(variants)
         self.qc.set_data(sample, self.cursor_ref)
-        self.set_cursor(self.cursor_ref, center=False)
+        # A newly selected sample must start in the same reference window in
+        # every trace; otherwise each AB1 opens around its own raw midpoint.
+        self.set_cursor(self.cursor_ref, center=True)
         self.save_action.setEnabled(bool(self.project.samples or self.project.wt_control or ref))
         self.save_as_action.setEnabled(bool(self.project.samples or self.project.wt_control or ref))
         self.export_action.setEnabled(bool(variants))
         self.reassign_action.setEnabled(bool(sample and sample.reads))
+        self.pair_reads_action.setEnabled(bool(self.project.samples))
         title = "Sanger Seek"
         if self.project.path:
             title += f" — {Path(self.project.path).name}"
@@ -484,14 +494,23 @@ class MainWindow(QMainWindow):
         self.cursor_ref = max(0, min(ref.n - 1, refpos))
         self.alignment.set_cursor(self.cursor_ref)
         if center:
-            for trace in self.trace_views:
-                if trace.isVisible():
-                    trace.center_on_ref(self.cursor_ref, self.trace_span_bases)
+            self._set_trace_reference_window(self.cursor_ref, self.trace_span_bases)
         else:
             for trace in self.trace_views:
                 if trace.isVisible():
                     trace.set_cursor_ref(self.cursor_ref)
         self.qc.set_data(self.current_sample, self.cursor_ref)
+
+    def _set_trace_reference_window(self, center: float, span: float) -> None:
+        """Apply one reference-coordinate viewport to every visible trace."""
+        self._trace_syncing = True
+        try:
+            for trace in self.trace_views:
+                if trace.isVisible():
+                    trace.set_reference_range(center - span / 2, center + span / 2)
+                    trace.set_cursor_ref(self.cursor_ref)
+        finally:
+            self._trace_syncing = False
 
     def move_cursor(self, delta: int) -> None:
         self.set_cursor(self.cursor_ref + delta)
@@ -508,19 +527,28 @@ class MainWindow(QMainWindow):
                         trace.fit_all()
             return
         self.trace_span_bases = max(5, min(2000, int(self.trace_span_bases * factor)))
-        for trace in self.trace_views:
-            if trace.isVisible():
-                trace.center_on_ref(self.cursor_ref, self.trace_span_bases)
+        self._set_trace_reference_window(self.cursor_ref, self.trace_span_bases)
 
     def _sync_trace_range(self, source: TraceView, ref_lo: float, ref_hi: float) -> None:
         if self._trace_layout_updating or self._trace_syncing:
             return
         self._trace_syncing = True
         try:
-            self.trace_span_bases = max(5, min(2000, int(round(ref_hi - ref_lo))))
+            span = ref_hi - ref_lo
+            center = (ref_lo + ref_hi) / 2
+            self.trace_span_bases = max(5, min(2000, int(round(span))))
+            if self.project.reference is not None:
+                self.cursor_ref = max(
+                    0, min(self.project.reference.n - 1, int(round(center)))
+                )
             for trace in self.trace_views:
                 if trace is not source and trace.isVisible():
-                    trace.set_reference_range(ref_lo, ref_hi)
+                    trace.set_reference_range(center - span / 2, center + span / 2)
+            self.alignment.set_cursor(self.cursor_ref)
+            self.qc.set_data(self.current_sample, self.cursor_ref)
+            for trace in self.trace_views:
+                if trace.isVisible():
+                    trace.set_cursor_ref(self.cursor_ref)
         finally:
             self._trace_syncing = False
 
@@ -581,6 +609,40 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"Exported {count} variant(s) to {Path(path).name}", 6000)
         except Exception as exc:
             self._show_error("Could not export variants", exc)
+
+    def edit_read_pairings(self) -> None:
+        if not self.project.samples:
+            return
+        dialog = PairingDialog(self.project.samples, self)
+        if dialog.exec() == QDialog.Accepted:
+            self.apply_read_assignments(dialog.assignments())
+
+    def apply_read_assignments(
+        self, assignments: list[tuple[Read, str, str | None]]
+    ) -> None:
+        """Rebuild assessed samples from explicit user read assignments."""
+        grouped: dict[str, Sample] = {}
+        for read, sample_name, orientation in assignments:
+            name = sample_name.strip()
+            if not name:
+                raise ValueError("Every read must have a sample name")
+            sample = grouped.setdefault(name, Sample(key=name, name=name))
+            read.orientation_override = orientation if orientation in ("F", "R") else None
+            base_id = f"{sample.key}/{read.label.lower()}"
+            read.id = base_id
+            suffix = 2
+            while sample.read_by_id(read.id):
+                read.id = f"{base_id}-{suffix}"
+                suffix += 1
+            sample.reads.append(read)
+        self.project.samples = sorted(grouped.values(), key=lambda sample: sample.name.lower())
+        old_name = self.current_sample.name if self.current_sample and self.current_sample is not self.project.wt_control else None
+        self.current_sample = next(
+            (sample for sample in self.project.samples if sample.name == old_name),
+            self.project.samples[0] if self.project.samples else self.project.wt_control,
+        )
+        self._dirty = True
+        self._begin_analysis()
 
     def reassign_read(self) -> None:
         source = self.current_sample

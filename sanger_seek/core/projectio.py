@@ -28,6 +28,7 @@ def save_project(project: Project, path: str | Path) -> None:
                     "ab1": r.ab1_path,
                     "seq": r.seq_path,
                     "hint": r.orientation_hint,
+                    "orientation_override": r.orientation_override,
                 }
                 for r in s.reads
             ],
@@ -89,6 +90,7 @@ def load_project(path: str | Path) -> tuple[Project, list[str]]:
                     ab1_path=ab1,
                     seq_path=seq,
                     orientation_hint=rdoc.get("hint"),
+                    orientation_override=rdoc.get("orientation_override"),
                 )
             )
         return sample if sample.reads else None

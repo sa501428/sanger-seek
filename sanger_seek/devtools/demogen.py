@@ -6,7 +6,7 @@ fully local, reproducible data:
 
   Sample001  het c.944C>T (p.Thr315Ile), hom c.1012delA (frameshift),
              hom c.1173G>A (synonymous; noisy/no-call on the reverse read)
-  Sample002  clean control (forward read only)
+  Sample002  clean bidirectional control
   Sample003  hom c.750G>A (p.Trp250Ter) + in-frame c.600_601insCTG
              (forward read only)
 """
@@ -293,6 +293,7 @@ def generate_demo(out_dir: str | Path, seed: int = 42) -> Path:
 
     # Sample002: clean control
     write_read(out, "Sample002_F", genome, (180, 1300), rng=rng)
+    write_read(out, "Sample002_R", genome, (180, 1300), reverse=True, rng=rng)
 
     # Sample003: nonsense SNV + in-frame insertion (single read)
     write_read(

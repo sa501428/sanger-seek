@@ -24,9 +24,8 @@ You can also open a folder or files directly:
 .venv/bin/sanger-seek --project review.sanger-seek.json
 ```
 
-The application accepts `.ab1`/`.abi`, `.seq`, FASTA, and GenBank files. Use **Load Reference**
-for the supplied reference, **Load WT Control** for one or more forward/reverse control contigs,
-and **Load Assessed Samples** for the samples under review. Reads are aligned independently to
+The application accepts `.ab1`/`.abi`, `.seq`, FASTA, and GenBank files. The primary workflow
+is **Load Reference**, **Load Controls**, then **Load Samples**. Reads are aligned independently to
 the reference and sample variants are labeled according to whether the same allele is present
 in the WT control.
 
@@ -41,9 +40,15 @@ forward/reverse. Zooming or horizontally dragging any trace synchronizes every v
 through reference coordinates. The base pair at the center is the shared anchor, even when
 the underlying AB1 sample positions and trace lengths differ.
 
+The alignment strip above the chromatograms shows five sequence rows when all four tracks are
+loaded: the reference, WT forward, WT reverse, sample forward, and sample reverse. A sixth
+**Sample − WT** row is a visual subtraction track: matching calls are dots, while differing or
+mixed sample calls are highlighted at their shared reference positions.
+
 Use **Pair / Assign Reads…** (`⌘P`) to override automatic grouping: give matching reads the
 same sample name and explicitly choose Forward or Reverse when filenames or automatic
-orientation are ambiguous. The assignments are saved in the project.
+orientation are ambiguous. The main interface intentionally omits save and export controls;
+it is focused on visual review and variant assessment.
 
 ## macOS application and DMG
 

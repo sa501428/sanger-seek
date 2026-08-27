@@ -53,15 +53,24 @@ def test_desktop_demo_analysis_and_screenshot(demo_dir, tmp_path):
     control_files = [
         str(demo_dir / "Sample002_F.ab1"),
         str(demo_dir / "Sample002_F.seq"),
+        str(demo_dir / "Sample002_R.ab1"),
+        str(demo_dir / "Sample002_R.seq"),
     ]
     window.add_control_paths(control_files)
     _wait_until(app, lambda: window._pending == 0)
     assert window.project.wt_control is not None
-    assert len(window.project.wt_control.reads) == 1
+    assert len(window.project.wt_control.reads) == 2
     window._select_sample("Sample001")
     app.processEvents()
     visible_traces = [trace for trace in window.trace_views if trace.read is not None]
-    assert len(visible_traces) == 3
+    assert len(visible_traces) == 4
+    assert [label for label, _read in window.alignment.track_rows] == [
+        "WT Fwd", "WT Rev", "Sample Fwd", "Sample Rev",
+    ]
+    assert window.alignment.show_difference
+    assert len(window.alignment.track_rows) + 1 == 5  # reference + one sequence per trace
+    wt_call, sample_call = window.alignment.difference_call_at(window.cursor_ref)
+    assert wt_call is not None and sample_call is not None
     sample1 = window.project.sample_by_key("Sample001")
     assert sample1 is not None
     assert any(v.control_status == "absent" for v in sample1.variants)

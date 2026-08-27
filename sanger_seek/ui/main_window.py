@@ -135,7 +135,6 @@ class MainWindow(QMainWindow):
                 lambda lo, hi, source=trace: self._sync_trace_range(source, lo, hi)
             )
         self.variants.variantSelected.connect(self._select_variant)
-        self.variants.exportRequested.connect(self.export_visible)
 
     def _action(self, text: str, slot, shortcut=None) -> QAction:
         action = QAction(text, self)
@@ -146,14 +145,11 @@ class MainWindow(QMainWindow):
 
     def _build_actions(self) -> None:
         self.reference_action = self._action("Load Reference…", self.open_reference, "Ctrl+R")
-        self.open_folder_action = self._action("Load Assessed Sample Folder…", self.open_folder, QKeySequence.Open)
-        self.add_files_action = self._action("Add Assessed Sample Reads…", self.add_files, "Ctrl+Shift+O")
-        self.control_files_action = self._action("Load WT Control Reads…", self.add_control_files, "Ctrl+Shift+W")
+        self.open_folder_action = self._action("Load Samples Folder…", self.open_folder, QKeySequence.Open)
+        self.add_files_action = self._action("Load Samples…", self.add_files, "Ctrl+Shift+O")
+        self.control_files_action = self._action("Load Controls…", self.add_control_files, "Ctrl+Shift+W")
         self.control_folder_action = self._action("Load WT Control Folder…", self.add_control_folder)
         self.open_project_action = self._action("Open Project…", self.open_project, "Ctrl+Alt+O")
-        self.save_action = self._action("Save Project", self.save, QKeySequence.Save)
-        self.save_as_action = self._action("Save Project As…", self.save_as, QKeySequence.SaveAs)
-        self.export_action = self._action("Export Visible Variants…", self.export_visible, "Ctrl+E")
         self.demo_action = self._action("Open Demo", self.open_demo)
         self.pair_reads_action = self._action("Pair / Assign Reads…", self.edit_read_pairings, "Ctrl+P")
         self.reassign_action = self._action("Move Read to Sample…", self.reassign_read)
@@ -171,8 +167,7 @@ class MainWindow(QMainWindow):
         file_menu.addSeparator()
         for action in (
             self.control_files_action, self.control_folder_action,
-            self.open_folder_action, self.add_files_action, self.open_project_action,
-            self.save_action, self.save_as_action, self.export_action,
+            self.open_folder_action, self.add_files_action,
         ):
             file_menu.addAction(action)
         file_menu.addSeparator()
@@ -200,8 +195,8 @@ class MainWindow(QMainWindow):
         toolbar.setObjectName("mainToolbar")
         toolbar.setMovable(False)
         for action in (
-            self.reference_action, self.control_files_action, self.open_folder_action,
-            self.add_files_action, self.pair_reads_action, self.save_action, self.export_action,
+            self.reference_action, self.control_files_action, self.add_files_action,
+            self.pair_reads_action,
         ):
             toolbar.addAction(action)
         toolbar.addSeparator()
@@ -450,10 +445,21 @@ class MainWindow(QMainWindow):
         sample = self.current_sample
         ref = self.project.reference
         self.summary.update_summary(sample, ref, self.project.wt_control)
-        self.alignment.set_data(ref, sample)
-        self.alignment.set_cursor(self.cursor_ref)
         variants = sample.variants if sample else []
         display_reads = self._display_reads()
+        control = self.project.wt_control
+        wt_reads = [read for title, read in display_reads if title.startswith("WT ")]
+        assessed_reads = [
+            read for title, read in display_reads
+            if control is not None and sample is not control and not title.startswith("WT ")
+        ]
+        alignment_rows = []
+        for title, read in display_reads:
+            cohort = "WT" if title.startswith("WT ") else "Sample"
+            direction = "Fwd" if read.orientation == "F" else "Rev" if read.orientation == "R" else "Read"
+            alignment_rows.append((f"{cohort} {direction}", read))
+        self.alignment.set_data(ref, sample, alignment_rows, wt_reads, assessed_reads)
+        self.alignment.set_cursor(self.cursor_ref)
         self._trace_layout_updating = True
         try:
             for i, trace in enumerate(self.trace_views):
@@ -475,16 +481,11 @@ class MainWindow(QMainWindow):
         # A newly selected sample must start in the same reference window in
         # every trace; otherwise each AB1 opens around its own raw midpoint.
         self.set_cursor(self.cursor_ref, center=True)
-        self.save_action.setEnabled(bool(self.project.samples or self.project.wt_control or ref))
-        self.save_as_action.setEnabled(bool(self.project.samples or self.project.wt_control or ref))
-        self.export_action.setEnabled(bool(variants))
         self.reassign_action.setEnabled(bool(sample and sample.reads))
         self.pair_reads_action.setEnabled(bool(self.project.samples))
         title = "Sanger Seek"
         if self.project.path:
             title += f" — {Path(self.project.path).name}"
-        if self._dirty:
-            title += " *"
         self.setWindowTitle(title)
 
     def set_cursor(self, refpos: int, center: bool = False) -> None:
@@ -733,13 +734,8 @@ class MainWindow(QMainWindow):
         QApplication.instance().quit()
 
     def _confirm_discard(self) -> bool:
-        if not self._dirty:
-            return True
-        answer = QMessageBox.question(
-            self, "Unsaved project", "Discard unsaved project changes?",
-            QMessageBox.Discard | QMessageBox.Cancel, QMessageBox.Cancel,
-        )
-        return answer == QMessageBox.Discard
+        # The app is a visualization workspace; closing never requires a save.
+        return True
 
     def _show_error(self, title: str, exc: Exception) -> None:
         QMessageBox.critical(self, title, str(exc))

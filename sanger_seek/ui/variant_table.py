@@ -1,4 +1,4 @@
-"""Variant review table with filters and CSV export."""
+"""Variant review table with visualization filters."""
 
 from __future__ import annotations
 
@@ -15,7 +15,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
-    QPushButton,
     QTableView,
     QVBoxLayout,
     QWidget,
@@ -152,7 +151,6 @@ class VariantFilterProxy(QSortFilterProxyModel):
 
 class VariantPanel(QWidget):
     variantSelected = Signal(object)     # Variant
-    exportRequested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -177,9 +175,6 @@ class VariantPanel(QWidget):
         self.count_label.setStyleSheet("color: #868e96;")
         top.addWidget(self.count_label)
         top.addStretch(1)
-        self.export_btn = QPushButton("Export CSV…")
-        self.export_btn.clicked.connect(self.exportRequested.emit)
-        top.addWidget(self.export_btn)
         layout.addLayout(top)
 
         self.table = QTableView()

@@ -8,7 +8,7 @@ from PySide6.QtCore import QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen
 from PySide6.QtWidgets import QSizePolicy, QWidget
 
-from ..core.dna import expand, translate_codon
+from ..core.dna import SETS_TO_IUPAC, bases_match, expand, translate_codon
 from ..core.model import Read, Reference, Sample
 from .theme import (
     CURSOR_COLOR,
@@ -21,7 +21,7 @@ from .theme import (
 CELL_W = 16
 ROW_H = 19
 RULER_H = 15
-LABEL_W = 84
+LABEL_W = 116
 
 
 class AlignmentStrip(QWidget):
@@ -31,6 +31,10 @@ class AlignmentStrip(QWidget):
         super().__init__(parent)
         self.reference: Reference | None = None
         self.sample: Sample | None = None
+        self.track_rows: list[tuple[str, Read]] = []
+        self.wt_reads: list[Read] = []
+        self.sample_reads: list[Read] = []
+        self.show_difference = False
         self.cursor: int = 0
         self._ins_map: dict[str, dict[int, str]] = {}
         self._font = QFont("Menlo, Monaco, Courier New", 11)
@@ -41,16 +45,26 @@ class AlignmentStrip(QWidget):
 
     # ------------------------------------------------------------------ data
 
-    def set_data(self, reference: Reference | None, sample: Sample | None) -> None:
+    def set_data(
+        self,
+        reference: Reference | None,
+        sample: Sample | None,
+        track_rows: list[tuple[str, Read]] | None = None,
+        wt_reads: list[Read] | None = None,
+        sample_reads: list[Read] | None = None,
+    ) -> None:
         self.reference = reference
         self.sample = sample
+        self.track_rows = list(track_rows or [])
+        self.wt_reads = list(wt_reads or [])
+        self.sample_reads = list(sample_reads or [])
+        self.show_difference = bool(self.wt_reads and self.sample_reads)
         self._ins_map.clear()
-        if sample is not None:
-            for read in sample.reads:
-                self._ins_map[read.id] = self._insertions(read)
-        rows = 2 + (1 if reference is not None and reference.cds else 0)
-        rows += len(sample.reads) if sample is not None else 0
-        self.setFixedHeight(RULER_H + max(rows - 1, 2) * ROW_H + 6)
+        for _label, read in self.track_rows:
+            self._ins_map[read.id] = self._insertions(read)
+        rows = 1 + len(self.track_rows) + int(self.show_difference)
+        rows += int(reference is not None and bool(reference.cds))
+        self.setFixedHeight(RULER_H + max(rows, 2) * ROW_H + 6)
         self.update()
 
     @staticmethod
@@ -120,10 +134,13 @@ class AlignmentStrip(QWidget):
             self._cell(p, col, y, base, base_color(base), None)
         y += ROW_H
 
-        if self.sample is not None:
-            for read in self.sample.reads:
-                self._paint_read_row(p, y, read, start, n_vis)
-                y += ROW_H
+        for label, read in self.track_rows:
+            self._paint_read_row(p, y, read, start, n_vis, label)
+            y += ROW_H
+
+        if self.show_difference:
+            self._paint_difference_row(p, y, start, n_vis)
+            y += ROW_H
 
         # cursor column outline
         col = self.cursor - start
@@ -182,8 +199,12 @@ class AlignmentStrip(QWidget):
                         aa,
                     )
 
-    def _paint_read_row(self, p: QPainter, y: int, read: Read, start: int, n_vis: int) -> None:
-        label = "Forward" if read.orientation == "F" else "Reverse" if read.orientation == "R" else read.label[:10]
+    def _paint_read_row(
+        self, p: QPainter, y: int, read: Read, start: int, n_vis: int, label: str | None = None
+    ) -> None:
+        label = label or (
+            "Forward" if read.orientation == "F" else "Reverse" if read.orientation == "R" else read.label[:14]
+        )
         self._paint_row_label(p, y, label)
         aln = read.alignment
         if aln is None:
@@ -218,6 +239,43 @@ class AlignmentStrip(QWidget):
                 x = LABEL_W + col * CELL_W
                 p.setPen(QPen(QColor("#9c36b5"), 2))
                 p.drawLine(int(x), int(y + 2), int(x), int(y + ROW_H - 2))
+
+    @staticmethod
+    def _group_call(reads: list[Read], refpos: int) -> str | None:
+        """Return a compact IUPAC consensus for the reads covering refpos."""
+        calls: list[str] = []
+        for read in reads:
+            aln = read.alignment
+            if aln is None or not (aln.ref_start <= refpos < aln.ref_end):
+                continue
+            idx = aln.read_index_at(refpos)
+            calls.append("-" if idx is None else read.oriented_base(idx))
+        if not calls:
+            return None
+        if all(call == "-" for call in calls):
+            return "-"
+        concrete: set[str] = set()
+        for call in calls:
+            concrete.update(expand(call))
+        return SETS_TO_IUPAC.get(frozenset(concrete), "N") if concrete else "-"
+
+    def difference_call_at(self, refpos: int) -> tuple[str | None, str | None]:
+        """WT and assessed consensus calls used by the subtraction row."""
+        return self._group_call(self.wt_reads, refpos), self._group_call(self.sample_reads, refpos)
+
+    def _paint_difference_row(self, p: QPainter, y: int, start: int, n_vis: int) -> None:
+        self._paint_row_label(p, y, "Sample − WT", "#9c36b5")
+        for col in range(n_vis):
+            g = start + col
+            wt, sample = self.difference_call_at(g)
+            if wt is None or sample is None:
+                continue
+            if wt == sample:
+                self._cell(p, col, y, "·", "#ced4da", None)
+                continue
+            overlaps = wt != "-" and sample != "-" and bases_match(wt, sample)
+            bg = MIXED_BG if overlaps else MISMATCH_BG
+            self._cell(p, col, y, sample, base_color(sample), bg)
 
     # ---------------------------------------------------------------- input
 

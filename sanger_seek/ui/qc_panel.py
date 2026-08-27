@@ -44,7 +44,7 @@ class QCPanel(QWidget):
 
         imported = QGroupBox("Imported call comparison")
         form = QFormLayout(imported)
-        self.discrepancy = QLabel("No sample")
+        self.discrepancy = QLabel("No case")
         self.discrepancy.setWordWrap(True)
         form.addRow(self.discrepancy)
         layout.addWidget(imported)
@@ -55,13 +55,17 @@ class QCPanel(QWidget):
         self.position_label.setText(f"Reference position {refpos + 1}")
         self.table.setRowCount(0)
         if sample is None:
-            self.discrepancy.setText("No sample")
+            self.discrepancy.setText("No case")
             return
 
         for read in sample.reads:
             self._add_read(read, refpos)
         reports = []
+        reports.extend(f"⚠ {flag}" for flag in sample.qc_flags)
         for read in sample.reads:
+            reports.extend(f"⚠ {read.label}: {flag}" for flag in read.qc_flags)
+            if read.error:
+                reports.append(f"⚠ {read.label}: {read.error}")
             report = read.discrepancies
             if report is None:
                 continue
@@ -75,7 +79,18 @@ class QCPanel(QWidget):
                 if report.note:
                     detail += f"; {report.note}"
                 reports.append(f"{read.label}: {report.count} difference(s){detail}")
-        self.discrepancy.setText("\n".join(reports) if reports else "No paired AB1/.seq calls")
+            phd_report = read.phd_discrepancies
+            if phd_report is not None:
+                if phd_report.count == 0:
+                    reports.append(f"{read.label}: AB1 and PHD calls agree")
+                else:
+                    detail = f"; {phd_report.note}" if phd_report.note else ""
+                    reports.append(
+                        f"{read.label}: {phd_report.count} PHD/AB1 difference(s){detail}"
+                    )
+        self.discrepancy.setText(
+            "\n".join(reports) if reports else "No quality flags or companion-call differences"
+        )
 
     def _add_read(self, read: Read, refpos: int) -> None:
         aln = read.alignment

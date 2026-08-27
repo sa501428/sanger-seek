@@ -16,7 +16,9 @@ from .ui.theme import APP_QSS
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Review Sanger chromatograms locally")
-    parser.add_argument("paths", nargs="*", help="AB1/SEQ/reference files or folders to open")
+    parser.add_argument(
+        "paths", nargs="*", help="AB1/SEQ/PHD case files or reference-containing folders to open"
+    )
     parser.add_argument("--project", help="open a .sanger-seek.json project")
     parser.add_argument("--demo", action="store_true", help="generate and open the local demo dataset")
     parser.add_argument(

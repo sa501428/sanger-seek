@@ -87,8 +87,12 @@ class Read:
     label: str
     ab1_path: Optional[str] = None
     seq_path: Optional[str] = None
+    phd_path: Optional[str] = None
     trace: Optional[TraceData] = None
     seq_imported: Optional[str] = None
+    phd_calls: Optional[str] = None
+    phd_quals: Optional[np.ndarray] = None
+    phd_ploc: Optional[np.ndarray] = None
     orientation_hint: Optional[str] = None
     orientation_override: Optional[str] = None  # explicit user choice: F | R
 
@@ -100,6 +104,9 @@ class Read:
     alignment: Optional[ReadAlignment] = None
     peaks: Optional[list[PeakMetrics]] = None
     discrepancies: Optional[DiscrepancyReport] = None
+    phd_discrepancies: Optional[DiscrepancyReport] = None
+    companion_errors: list[str] = field(default_factory=list)
+    qc_flags: list[str] = field(default_factory=list)
     error: str = ""
 
     @property
@@ -235,6 +242,7 @@ class Sample:
     reads: list[Read] = field(default_factory=list)
     variants: list[Variant] = field(default_factory=list)
     analyzed: bool = False
+    qc_flags: list[str] = field(default_factory=list)
     error: str = ""
 
     def read_by_id(self, read_id: str) -> Optional[Read]:

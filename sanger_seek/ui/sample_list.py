@@ -1,4 +1,4 @@
-"""Samples dock: one row per sample with read/variant summary."""
+"""Cases dock: one row per case with read/variant/QC summary."""
 
 from __future__ import annotations
 
@@ -46,9 +46,7 @@ class SampleList(QListWidget):
         vs = f"{len(s.variants)} variant{'s' if len(s.variants) != 1 else ''}"
         if s.variants:
             vs += f" ({n_high} high, {n_rev} review)"
-        warn = ""
-        if any(r.error for r in s.reads):
-            warn = " ⚠"
+        warn = " ⚠ review" if s.qc_flags or any(r.error or r.qc_flags for r in s.reads) else ""
         return f"{s.name}{warn}\n{reads} · {vs}"
 
     def refresh_sample(self, sample: Sample) -> None:

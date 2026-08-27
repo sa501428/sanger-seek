@@ -8,9 +8,9 @@ from pathlib import Path
 from .model import Reference, Sample, Variant
 
 HEADER = [
-    "sample", "variant", "protein", "effect", "gene", "type",
+    "case", "variant", "protein", "effect", "gene", "type",
     "ref_pos_1based", "ref", "alt", "mixed", "alt_fraction",
-    "fwd", "rev", "wt_control", "strand_status", "trace_quality", "confidence",
+    "fwd", "rev", "strand_status", "trace_quality", "confidence",
     "evidence",
 ]
 
@@ -57,7 +57,6 @@ def variant_row(sample: Sample, v: Variant) -> list[str]:
         f"{v.alt_fraction:.2f}" if v.alt_fraction is not None else "",
         _strand_mark(v, "F"),
         _strand_mark(v, "R"),
-        v.control_status,
         v.strand_status,
         v.trace_quality,
         v.confidence,

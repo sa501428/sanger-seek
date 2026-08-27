@@ -1,4 +1,4 @@
-"""Top summary strip: sample, reference, reads, variants, QC toggle."""
+"""Top summary strip: case, reference, reads, variants, QC toggle."""
 
 from __future__ import annotations
 
@@ -23,17 +23,18 @@ class SummaryBar(QWidget):
         layout.setContentsMargins(8, 4, 8, 4)
         layout.setSpacing(8)
 
-        self.sample_label = QLabel("No sample")
+        self.sample_label = QLabel("No case")
         self.sample_label.setStyleSheet("font-weight: 700; font-size: 14px;")
         layout.addWidget(self.sample_label)
 
         self.ref_chip = _chip("no reference")
         self.reads_chip = _chip("0 reads")
         self.var_chip = _chip("–")
-        self.control_chip = _chip("WT: not loaded")
+        self.qc_chip = _chip("")
         self.disc_chip = _chip("")
-        for c in (self.ref_chip, self.control_chip, self.reads_chip, self.var_chip, self.disc_chip):
+        for c in (self.ref_chip, self.reads_chip, self.var_chip, self.qc_chip, self.disc_chip):
             layout.addWidget(c)
+        self.qc_chip.hide()
         self.disc_chip.hide()
 
         layout.addStretch(1)
@@ -43,7 +44,7 @@ class SummaryBar(QWidget):
         layout.addWidget(self.qc_btn)
 
     def update_summary(
-        self, sample: Sample | None, reference: Reference | None, control: Sample | None = None
+        self, sample: Sample | None, reference: Reference | None
     ) -> None:
         if reference is not None:
             gene = reference.cds[0].gene if reference.cds else None
@@ -51,20 +52,14 @@ class SummaryBar(QWidget):
                 f"ref: {reference.name}" + (f" · {gene}" if gene else "") + f" · {reference.n} bp"
             )
         else:
-            self.ref_chip.setText("no reference — load FASTA/GenBank")
-
-        if control is None:
-            self.control_chip.setText("WT: not loaded")
-        elif control.analyzed:
-            self.control_chip.setText(f"WT: {len(control.reads)} contig read(s)")
-        else:
-            self.control_chip.setText("WT: analyzing…")
+            self.ref_chip.setText("no reference — load a reference .seq file first")
 
         if sample is None:
-            self.sample_label.setText("No sample")
+            self.sample_label.setText("No case")
             self.reads_chip.setText("0 reads")
             self.var_chip.setText("–")
             self.disc_chip.hide()
+            self.qc_chip.hide()
             return
 
         self.sample_label.setText(sample.name)
@@ -78,9 +73,20 @@ class SummaryBar(QWidget):
             self.var_chip.setText(
                 f"{len(sample.variants)} candidate variants · {n_high} high confidence"
             )
-        n_disc = sum(r.discrepancies.count for r in sample.reads if r.discrepancies)
+        if sample.qc_flags:
+            self.qc_chip.setText(f"⚠ {len(sample.qc_flags)} review flag(s)")
+            self.qc_chip.show()
+            self.qc_chip.setToolTip("\n".join(sample.qc_flags))
+        else:
+            self.qc_chip.hide()
+        n_disc = sum(
+            report.count
+            for r in sample.reads
+            for report in (r.discrepancies, r.phd_discrepancies)
+            if report
+        )
         if n_disc:
-            self.disc_chip.setText(f"⚠ {n_disc} .seq/.ab1 call difference(s)")
+            self.disc_chip.setText(f"⚠ {n_disc} companion/AB1 call difference(s)")
             self.disc_chip.show()
         else:
             self.disc_chip.hide()

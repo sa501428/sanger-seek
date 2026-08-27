@@ -22,7 +22,6 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..core.consensus import compare_sample_to_control
 from ..core.export import export_variants_csv
 from ..core.model import Project, Read, Sample, Variant
 from ..core.pairing import scan_paths
@@ -41,8 +40,8 @@ from .workers import AnalyzeJob
 
 
 PROJECT_FILTER = "Sanger Seek projects (*.sanger-seek.json *.json)"
-INPUT_FILTER = "Sanger data (*.ab1 *.abi *.ab *.seq *.fa *.fasta *.fna *.ffn *.gb *.gbk *.genbank *.gbff)"
-READ_FILTER = "Sanger reads (*.ab1 *.abi *.ab *.seq)"
+INPUT_FILTER = "Sanger data (*.ab1 *.abi *.ab *.seq *.phd *.phd.* *.fa *.fasta *.fna *.ffn *.gb *.gbk *.genbank *.gbff)"
+READ_FILTER = "Case files (*.ab1 *.abi *.ab *.seq *.phd *.phd.*)"
 REFERENCE_FILTER = "Reference sequence (*.gb *.gbk *.genbank *.gbff *.fa *.fasta *.fna *.ffn *.seq)"
 
 
@@ -86,7 +85,7 @@ class MainWindow(QMainWindow):
         layout.setSpacing(5)
         self.summary = SummaryBar()
         self.alignment = AlignmentStrip()
-        self.trace_views = [TraceView(f"Chromatogram {i + 1}") for i in range(4)]
+        self.trace_views = [TraceView("Forward chromatogram"), TraceView("Reverse chromatogram")]
         # Backward-compatible aliases used by tests and integrations.
         self.forward_trace = self.trace_views[0]
         self.reverse_trace = self.trace_views[1]
@@ -96,7 +95,7 @@ class MainWindow(QMainWindow):
         traces = QSplitter(Qt.Vertical)
         for trace in self.trace_views:
             traces.addWidget(trace)
-        traces.setSizes([150, 150, 150, 150])
+        traces.setSizes([260, 260])
         lower = QSplitter(Qt.Vertical)
         lower.addWidget(traces)
         lower.addWidget(self.variants)
@@ -106,7 +105,7 @@ class MainWindow(QMainWindow):
 
         self.sample_list = SampleList()
         self.sample_list.setSelectionMode(QAbstractItemView.SingleSelection)
-        self.samples_dock = QDockWidget("Samples", self)
+        self.samples_dock = QDockWidget("Cases", self)
         self.samples_dock.setObjectName("samplesDock")
         self.samples_dock.setMinimumWidth(240)
         self.samples_dock.setWidget(self.sample_list)
@@ -145,10 +144,9 @@ class MainWindow(QMainWindow):
 
     def _build_actions(self) -> None:
         self.reference_action = self._action("Load Reference…", self.open_reference, "Ctrl+R")
-        self.open_folder_action = self._action("Load Samples Folder…", self.open_folder, QKeySequence.Open)
-        self.add_files_action = self._action("Load Samples…", self.add_files, "Ctrl+Shift+O")
-        self.control_files_action = self._action("Load Controls…", self.add_control_files, "Ctrl+Shift+W")
-        self.control_folder_action = self._action("Load WT Control Folder…", self.add_control_folder)
+        self.new_case_action = self._action("New Case…", self.new_case, "Ctrl+N")
+        self.open_folder_action = self._action("Import Cases Folder…", self.open_folder, QKeySequence.Open)
+        self.add_files_action = self._action("Add Files to Current Case…", self.add_files, "Ctrl+Shift+O")
         self.open_project_action = self._action("Open Project…", self.open_project, "Ctrl+Alt+O")
         self.demo_action = self._action("Open Demo", self.open_demo)
         self.pair_reads_action = self._action("Pair / Assign Reads…", self.edit_read_pairings, "Ctrl+P")
@@ -166,8 +164,7 @@ class MainWindow(QMainWindow):
         file_menu.addAction(self.reference_action)
         file_menu.addSeparator()
         for action in (
-            self.control_files_action, self.control_folder_action,
-            self.open_folder_action, self.add_files_action,
+            self.new_case_action, self.add_files_action, self.open_folder_action,
         ):
             file_menu.addAction(action)
         file_menu.addSeparator()
@@ -195,7 +192,7 @@ class MainWindow(QMainWindow):
         toolbar.setObjectName("mainToolbar")
         toolbar.setMovable(False)
         for action in (
-            self.reference_action, self.control_files_action, self.add_files_action,
+            self.reference_action, self.new_case_action, self.add_files_action,
             self.pair_reads_action,
         ):
             toolbar.addAction(action)
@@ -232,26 +229,97 @@ class MainWindow(QMainWindow):
     # --------------------------------------------------------------- loading
 
     def open_folder(self) -> None:
-        path = QFileDialog.getExistingDirectory(self, "Load assessed sample folder", self._start_dir())
+        path = QFileDialog.getExistingDirectory(self, "Import cases folder", self._start_dir())
         if path:
             self.add_paths([path])
 
     def add_files(self) -> None:
-        paths, _ = QFileDialog.getOpenFileNames(self, "Add assessed sample reads", self._start_dir(), READ_FILTER)
+        if self.current_sample is None:
+            self.new_case()
+            return
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, f"Add files to {self.current_sample.name}", self._start_dir(), READ_FILTER
+        )
         if paths:
-            self.add_paths(paths)
+            try:
+                self.add_case_paths(self.current_sample.name, paths, create=False)
+            except Exception as exc:
+                self._show_error("Could not add case files", exc)
+
+    def new_case(self) -> None:
+        if self.project.reference is None:
+            QMessageBox.information(
+                self, "Load a reference first",
+                "Assign the region/gene reference .seq file before creating a case.",
+            )
+            return
+        name, ok = QInputDialog.getText(self, "New case", "Case name:")
+        if not ok or not name.strip():
+            return
+        name = name.strip()
+        if self.project.sample_by_key(name) is not None:
+            QMessageBox.warning(self, "Case exists", "A case with that name already exists.")
+            return
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, f"Select forward/reverse files for {name}", self._start_dir(), READ_FILTER
+        )
+        if paths:
+            try:
+                self.add_case_paths(name, paths, create=True)
+            except Exception as exc:
+                self._show_error("Could not create case", exc)
+
+    def add_case_paths(self, case_name: str, paths: list[str], create: bool = True) -> None:
+        """Put all selected AB1/PHD/SEQ companions into one named case."""
+        if self.project.reference is None:
+            raise ValueError("Load the reference .seq file before adding case data")
+        scan = scan_paths(paths)
+        groups = build_samples_from_scan(scan)
+        reads = [read for group in groups for read in group.reads]
+        if not reads or not any(read.ab1_path for read in reads):
+            raise ValueError("A case must include at least one .ab1 chromatogram")
+        case = self.project.sample_by_key(case_name)
+        if case is None:
+            if not create:
+                raise ValueError(f"Case not found: {case_name}")
+            case = Sample(key=case_name, name=case_name)
+            self.project.samples.append(case)
+        known = {(r.ab1_path, r.seq_path, r.phd_path) for r in case.reads}
+        for read in reads:
+            if (read.ab1_path, read.seq_path, read.phd_path) in known:
+                continue
+            base_id = f"{case.key}/{read.label.lower()}"
+            read.id = base_id
+            suffix = 2
+            while case.read_by_id(read.id):
+                read.id = f"{base_id}-{suffix}"
+                suffix += 1
+            case.reads.append(read)
+        self.project.samples.sort(key=lambda item: item.name.lower())
+        self.current_sample = case
+        self._remember_dir(paths[0])
+        self._dirty = True
+        self._begin_analysis()
 
     def add_paths(self, paths: list[str]) -> None:
         if not paths:
             return
         self._remember_dir(paths[0])
         try:
-            scan = load_project_inputs(paths, self.project)
-            if scan.references:
-                preferred = next((p for p in scan.references if p.suffix.lower() in {".gb", ".gbk", ".genbank", ".gbff"}), scan.references[0])
+            if self.project.reference is None:
+                prescan = scan_paths(paths)
+                if not prescan.references:
+                    QMessageBox.information(
+                        self, "Load a reference first",
+                        "Assign the region/gene reference .seq file before importing cases.",
+                    )
+                    return
+                preferred = next(
+                    (p for p in prescan.references if p.suffix.lower() in {".gb", ".gbk", ".genbank", ".gbff"}),
+                    prescan.references[0],
+                )
                 self.project.reference = load_reference(preferred)
-                if len(scan.references) > 1:
-                    self.statusBar().showMessage(f"Loaded {preferred.name}; {len(scan.references) - 1} other reference file(s) ignored", 8000)
+            scan = load_project_inputs(paths, self.project)
             if not self.project.samples and not self.project.reference:
                 QMessageBox.information(self, "No Sanger files", "No supported Sanger or reference files were found.")
                 return
@@ -273,44 +341,6 @@ class MainWindow(QMainWindow):
             self._begin_analysis()
         except Exception as exc:
             self._show_error("Could not load reference", exc)
-
-    def add_control_files(self) -> None:
-        paths, _ = QFileDialog.getOpenFileNames(self, "Load WT control reads", self._start_dir(), READ_FILTER)
-        if paths:
-            self.add_control_paths(paths)
-
-    def add_control_folder(self) -> None:
-        path = QFileDialog.getExistingDirectory(self, "Load WT control folder", self._start_dir())
-        if path:
-            self.add_control_paths([path])
-
-    def add_control_paths(self, paths: list[str]) -> None:
-        """Load any number of paired or overlapping WT contigs as one control."""
-        try:
-            scan = scan_paths(paths)
-            groups = build_samples_from_scan(scan)
-            reads = [read for group in groups for read in group.reads]
-            if not reads:
-                raise ValueError("No AB1 or read .seq files were found")
-            control = self.project.wt_control or Sample(key="__WT_CONTROL__", name="WT control")
-            known = {(r.ab1_path, r.seq_path) for r in control.reads}
-            for read in reads:
-                if (read.ab1_path, read.seq_path) in known:
-                    continue
-                base_id = f"{control.key}/{read.label.lower()}"
-                read.id = base_id
-                suffix = 2
-                while control.read_by_id(read.id):
-                    read.id = f"{base_id}-{suffix}"
-                    suffix += 1
-                control.reads.append(read)
-            self.project.wt_control = control
-            self.current_sample = control
-            self._remember_dir(paths[0])
-            self._dirty = True
-            self._begin_analysis()
-        except Exception as exc:
-            self._show_error("Could not load WT control", exc)
 
     def open_project(self) -> None:
         if not self._confirm_discard():
@@ -351,13 +381,13 @@ class MainWindow(QMainWindow):
     def _begin_analysis(self) -> None:
         self._generation += 1
         generation = self._generation
-        samples = ([self.project.wt_control] if self.project.wt_control else []) + self.project.samples
+        samples = self.project.samples
         self.sample_list.set_samples(samples, self.current_sample.key if self.current_sample else None)
         self._pending = len(samples)
         self.progress.setRange(0, max(self._pending, 1))
         self.progress.setValue(0)
         self.progress.setVisible(bool(samples))
-        self.statusBar().showMessage(f"Analyzing {len(samples)} sample(s)…" if samples else "Reference loaded")
+        self.statusBar().showMessage(f"Analyzing {len(samples)} case(s)…" if samples else "Reference loaded")
         if not samples:
             self._update_ui()
             self._maybe_screenshot()
@@ -382,8 +412,6 @@ class MainWindow(QMainWindow):
         if self.current_sample is sample:
             self._update_ui()
         if self._pending == 0:
-            for assessed in self.project.samples:
-                compare_sample_to_control(assessed, self.project.wt_control)
             self.progress.hide()
             self.statusBar().showMessage("Analysis complete" if not error else f"Analysis finished with an error: {error}", 6000)
             if self.current_sample is None and self.project.samples:
@@ -402,8 +430,6 @@ class MainWindow(QMainWindow):
         self._update_ui()
 
     def _sample_by_key(self, key: str) -> Sample | None:
-        if self.project.wt_control and self.project.wt_control.key == key:
-            return self.project.wt_control
         return self.project.sample_by_key(key)
 
     @staticmethod
@@ -419,46 +445,34 @@ class MainWindow(QMainWindow):
         if self.current_sample is None:
             return []
 
-        def titled(role: str, reads: list[Read]) -> list[tuple[str, Read]]:
-            return [
-                (f"{role} {'Forward' if r.orientation == 'F' else 'Reverse' if r.orientation == 'R' else 'Read'}", r)
-                for r in reads
-            ]
-
         sample_reads = self._ordered_trace_reads(self.current_sample)
-        control = self.project.wt_control
-        if control is None or self.current_sample is control:
-            role = "WT" if self.current_sample is control else self.current_sample.name
-            return titled(role, sample_reads[:4])
-
-        control_reads = self._ordered_trace_reads(control)
-        selected_control = control_reads[:2]
-        selected_sample = sample_reads[:2]
-        display = titled("WT", selected_control) + titled(self.current_sample.name, selected_sample)
-        if len(display) < 4:
-            display += titled(self.current_sample.name, sample_reads[2 : 2 + (4 - len(display))])
-        if len(display) < 4:
-            display += titled("WT", control_reads[2 : 2 + (4 - len(display))])
-        return display[:4]
+        selected: list[Read] = []
+        for orientation in ("F", "R"):
+            read = next((r for r in sample_reads if r.orientation == orientation), None)
+            if read is not None:
+                selected.append(read)
+        for read in sample_reads:
+            if len(selected) >= 2:
+                break
+            if read not in selected:
+                selected.append(read)
+        return [
+            ("Forward chromatogram" if r.orientation == "F" else
+             "Reverse chromatogram" if r.orientation == "R" else "Chromatogram", r)
+            for r in selected
+        ]
 
     def _update_ui(self) -> None:
         sample = self.current_sample
         ref = self.project.reference
-        self.summary.update_summary(sample, ref, self.project.wt_control)
+        self.summary.update_summary(sample, ref)
         variants = sample.variants if sample else []
         display_reads = self._display_reads()
-        control = self.project.wt_control
-        wt_reads = [read for title, read in display_reads if title.startswith("WT ")]
-        assessed_reads = [
-            read for title, read in display_reads
-            if control is not None and sample is not control and not title.startswith("WT ")
-        ]
         alignment_rows = []
         for title, read in display_reads:
-            cohort = "WT" if title.startswith("WT ") else "Sample"
             direction = "Fwd" if read.orientation == "F" else "Rev" if read.orientation == "R" else "Read"
-            alignment_rows.append((f"{cohort} {direction}", read))
-        self.alignment.set_data(ref, sample, alignment_rows, wt_reads, assessed_reads)
+            alignment_rows.append((direction, read))
+        self.alignment.set_data(ref, sample, alignment_rows)
         self.alignment.set_cursor(self.cursor_ref)
         self._trace_layout_updating = True
         try:
@@ -483,6 +497,8 @@ class MainWindow(QMainWindow):
         self.set_cursor(self.cursor_ref, center=True)
         self.reassign_action.setEnabled(bool(sample and sample.reads))
         self.pair_reads_action.setEnabled(bool(self.project.samples))
+        self.add_files_action.setEnabled(sample is not None)
+        self.new_case_action.setEnabled(ref is not None)
         title = "Sanger Seek"
         if self.project.path:
             title += f" — {Path(self.project.path).name}"
@@ -621,12 +637,12 @@ class MainWindow(QMainWindow):
     def apply_read_assignments(
         self, assignments: list[tuple[Read, str, str | None]]
     ) -> None:
-        """Rebuild assessed samples from explicit user read assignments."""
+        """Rebuild cases from explicit user read assignments."""
         grouped: dict[str, Sample] = {}
         for read, sample_name, orientation in assignments:
             name = sample_name.strip()
             if not name:
-                raise ValueError("Every read must have a sample name")
+                raise ValueError("Every read must have a case name")
             sample = grouped.setdefault(name, Sample(key=name, name=name))
             read.orientation_override = orientation if orientation in ("F", "R") else None
             base_id = f"{sample.key}/{read.label.lower()}"
@@ -637,10 +653,10 @@ class MainWindow(QMainWindow):
                 suffix += 1
             sample.reads.append(read)
         self.project.samples = sorted(grouped.values(), key=lambda sample: sample.name.lower())
-        old_name = self.current_sample.name if self.current_sample and self.current_sample is not self.project.wt_control else None
+        old_name = self.current_sample.name if self.current_sample else None
         self.current_sample = next(
             (sample for sample in self.project.samples if sample.name == old_name),
-            self.project.samples[0] if self.project.samples else self.project.wt_control,
+            self.project.samples[0] if self.project.samples else None,
         )
         self._dirty = True
         self._begin_analysis()
@@ -653,20 +669,19 @@ class MainWindow(QMainWindow):
         label, ok = QInputDialog.getItem(self, "Move read", "Read:", labels, 0, False)
         if not ok:
             return
-        all_destinations = ([self.project.wt_control] if self.project.wt_control else []) + self.project.samples
-        targets = [s for s in all_destinations if s is not source]
-        names = [s.name for s in targets] + ["New sample…"]
-        target_name, ok = QInputDialog.getItem(self, "Move read", "Destination sample:", names, 0, False)
+        targets = [s for s in self.project.samples if s is not source]
+        names = [s.name for s in targets] + ["New case…"]
+        target_name, ok = QInputDialog.getItem(self, "Move read", "Destination case:", names, 0, False)
         if not ok:
             return
         read = next(r for r in source.reads if r.label == label)
-        if target_name == "New sample…":
-            name, ok = QInputDialog.getText(self, "New sample", "Sample name:")
+        if target_name == "New case…":
+            name, ok = QInputDialog.getText(self, "New case", "Case name:")
             if not ok or not name.strip():
                 return
             key = name.strip()
             if self.project.sample_by_key(key):
-                QMessageBox.warning(self, "Sample exists", "A sample with that key already exists.")
+                QMessageBox.warning(self, "Case exists", "A case with that name already exists.")
                 return
             target = Sample(key=key, name=key)
             self.project.samples.append(target)
@@ -676,10 +691,7 @@ class MainWindow(QMainWindow):
         read.id = f"{target.key}/{read.label.lower()}"
         target.reads.append(read)
         if not source.reads:
-            if source is self.project.wt_control:
-                self.project.wt_control = None
-            else:
-                self.project.samples.remove(source)
+            self.project.samples.remove(source)
         self.current_sample = target
         self._dirty = True
         self.project.samples.sort(key=lambda s: s.name.lower())

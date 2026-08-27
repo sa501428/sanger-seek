@@ -1,11 +1,44 @@
 # Sanger Seek
 
-Sanger Seek is a local macOS desktop application for reviewing Sanger chromatograms,
-reconciling forward/reverse evidence, and auditing candidate variants against the raw trace.
-Sequence data stays on the Mac.
+Sanger Seek is a local macOS desktop application for reviewing forward and reverse Sanger
+chromatograms against a user-assigned reference, reconciling strand evidence, and auditing
+candidate variants against the raw traces. Sequence data stays on the Mac.
 
 > Sanger Seek is research-review software. Its calling and QC rules have not been formally
 > validated for clinical diagnostic use.
+
+## Review workflow
+
+1. Choose **Load Reference…** and assign the `.seq` reference for the region or gene of
+   interest. FASTA and GenBank references remain supported; GenBank CDS annotations enable
+   coding and protein consequence labels.
+2. Choose **New Case…**, name the case without assigning it a special biological role, then
+   select all files belonging to it.
+3. Include the forward and reverse `.ab1` chromatograms. Same-stem `.seq`, `.phd`, and
+   numbered `.phd.1` files are optional companions.
+4. Review reference-aligned differences, strand support, chromatograms, and QC/artifact flags.
+
+Cases are neutral: a case can represent a sample, control, WT, standard, or any other material.
+The app does not privilege one case as a control or subtract one case from another.
+
+The AB1 remains authoritative for the raw electropherogram, embedded calls, qualities, and
+peak positions. Optional SEQ and PHD calls are compared with the AB1 calls and disagreements
+are surfaced for review; they do not replace the trace. Common Phred naming such as
+`read_F.ab1.phd.1` is recognized and paired with `read_F.ab1`.
+
+Forward and reverse reads are aligned independently to the reference and displayed in the
+same reference orientation. Dragging or zooming either chromatogram synchronizes the other
+through reference coordinates. Use the mouse/trackpad, visible `+`, `−`, and **Fit** controls,
+or `⌘+`, `⌘−`, and `⌘0`. Clicking a variant row centers the alignment and both chromatograms at
+that reference position.
+
+Review flags include missing forward/reverse traces, low mean quality, heavy trimming,
+frequent secondary peaks, weak reference alignment, companion-call disagreement, noisy
+variant evidence, and strand disagreement. These are prompts for visual review, not automatic
+pass/fail decisions.
+
+Use **Assign Reads to Cases…** (`⌘P`) to correct case membership or explicitly set a read as
+Forward or Reverse when filenames and automatic alignment are ambiguous.
 
 ## Run from source
 
@@ -17,38 +50,12 @@ python3 -m venv .venv
 .venv/bin/sanger-seek --demo
 ```
 
-You can also open a folder or files directly:
+You can also import a folder containing a reference and conventionally named case files:
 
 ```bash
 .venv/bin/sanger-seek /path/to/sanger-folder
 .venv/bin/sanger-seek --project review.sanger-seek.json
 ```
-
-The application accepts `.ab1`/`.abi`, `.seq`, FASTA, and GenBank files. The primary workflow
-is **Load Reference**, **Load Controls**, then **Load Samples**. Reads are aligned independently to
-the reference and sample variants are labeled according to whether the same allele is present
-in the WT control.
-
-An explicitly selected `.seq` file can be the reference. GenBank records saved with a `.seq`
-suffix are detected from their `LOCUS` header. Plain `.seq` references are sequence-only;
-GenBank references retain CDS annotations and enable coding/protein consequences.
-
-Chromatograms support trackpad/mouse-wheel zoom, double-click-to-zoom, visible `+`, `−`, and
-**Fit** controls, and synchronized keyboard shortcuts: `⌘+`, `⌘−`, and `⌘0`. Up to four
-chromatograms are shown at once—normally WT forward/reverse and assessed-sample
-forward/reverse. Zooming or horizontally dragging any trace synchronizes every visible trace
-through reference coordinates. The base pair at the center is the shared anchor, even when
-the underlying AB1 sample positions and trace lengths differ.
-
-The alignment strip above the chromatograms shows five sequence rows when all four tracks are
-loaded: the reference, WT forward, WT reverse, sample forward, and sample reverse. A sixth
-**Sample − WT** row is a visual subtraction track: matching calls are dots, while differing or
-mixed sample calls are highlighted at their shared reference positions.
-
-Use **Pair / Assign Reads…** (`⌘P`) to override automatic grouping: give matching reads the
-same sample name and explicitly choose Forward or Reverse when filenames or automatic
-orientation are ambiguous. The main interface intentionally omits save and export controls;
-it is focused on visual review and variant assessment.
 
 ## macOS application and DMG
 
@@ -63,7 +70,7 @@ The build creates:
 - `dist/Sanger Seek.app`
 - `dist/Sanger-Seek-0.1.0.dmg`
 
-The default build is ad-hoc signed and is suitable for local testing. For distribution, provide
+The default build is ad-hoc signed and suitable for local testing. For distribution, provide
 a Developer ID Application identity and an optional notarytool keychain profile:
 
 ```bash
@@ -72,10 +79,7 @@ APPLE_NOTARY_PROFILE="sanger-seek-notary" \
 ./scripts/build_macos.sh
 ```
 
-Create the notary profile once with `xcrun notarytool store-credentials`. Apple notarization
-requires an Apple Developer account and cannot be completed using an ad-hoc signature.
-
-To select a particular compatible Python installation, set `PYTHON_BIN`, for example:
+To select a compatible Python installation, set `PYTHON_BIN`, for example:
 
 ```bash
 PYTHON_BIN=/opt/homebrew/bin/python3.13 ./scripts/build_macos.sh

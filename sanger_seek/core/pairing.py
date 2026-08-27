@@ -14,6 +14,7 @@ from pathlib import Path
 
 AB1_EXTS = {".ab1", ".abi", ".ab"}
 SEQ_EXTS = {".seq"}
+PHD_RE = re.compile(r"\.phd(?:\.\d+)?$", re.IGNORECASE)
 FASTA_EXTS = {".fa", ".fasta", ".fna", ".ffn"}
 GENBANK_EXTS = {".gb", ".gbk", ".genbank", ".gbff"}
 
@@ -25,7 +26,10 @@ _DIR_RE = re.compile(
 
 
 def classify(path: str | Path) -> str | None:
-    ext = Path(path).suffix.lower()
+    p = Path(path)
+    if PHD_RE.search(p.name):
+        return "phd"
+    ext = p.suffix.lower()
     if ext in AB1_EXTS:
         return "ab1"
     if ext in SEQ_EXTS:
@@ -52,6 +56,7 @@ class ReadFiles:
     stem: str
     ab1: Path | None = None
     seq: Path | None = None
+    phd: Path | None = None
     hint: str | None = None
 
 
@@ -68,6 +73,7 @@ class ScanResult:
                 if rkey in mine:
                     mine[rkey].ab1 = mine[rkey].ab1 or rf.ab1
                     mine[rkey].seq = mine[rkey].seq or rf.seq
+                    mine[rkey].phd = mine[rkey].phd or rf.phd
                     mine[rkey].hint = mine[rkey].hint or rf.hint
                 else:
                     mine[rkey] = rf
@@ -93,15 +99,23 @@ def scan_paths(paths: list[str | Path]) -> ScanResult:
         if kind in ("fasta", "genbank"):
             result.references.append(f)
             continue
-        stem = f.stem
+        if kind == "phd":
+            stem = PHD_RE.sub("", f.name)
+            # Common Phred output is ``read.ab1.phd.1``.
+            if Path(stem).suffix.lower() in AB1_EXTS:
+                stem = Path(stem).stem
+        else:
+            stem = f.stem
         sample_key, hint = split_direction(stem)
         rkey = stem.lower()
         reads = result.samples.setdefault(sample_key, {})
         rf = reads.setdefault(rkey, ReadFiles(stem=stem, hint=hint))
         if kind == "ab1":
             rf.ab1 = f
-        else:
+        elif kind == "seq":
             rf.seq = f
+        else:
+            rf.phd = f
         if rf.hint is None:
             rf.hint = hint
     return result

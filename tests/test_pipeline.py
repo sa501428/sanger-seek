@@ -3,9 +3,9 @@
 import pytest
 
 from sanger_seek.core.export import export_variants_csv
-from sanger_seek.core.model import Config, Project
+from sanger_seek.core.model import Config, Project, Read
 from sanger_seek.core.pairing import scan_paths
-from sanger_seek.core.pipeline import analyze_sample, build_samples_from_scan
+from sanger_seek.core.pipeline import analyze_sample, build_samples_from_scan, prepare_read
 from sanger_seek.core.projectio import load_project, save_project
 from sanger_seek.core.reference import load_reference
 from sanger_seek.devtools.demogen import DEL_1BP, HET_SNV, INS_POS, NONSENSE_SNV, SYN_SNV
@@ -31,6 +31,28 @@ def test_pairing(analyzed):
     assert len(s1.reads) == 2
     for r in s1.reads:
         assert r.ab1_path and r.seq_path
+
+
+def test_optional_phd_is_compared_without_replacing_ab1(demo_dir, tmp_path):
+    ab1_path = demo_dir / "Sample002_F.ab1"
+    baseline = Read(id="baseline", label="baseline", ab1_path=str(ab1_path))
+    prepare_read(baseline, Config())
+    calls = list(baseline.calls)
+    calls[10] = {"A": "C", "C": "G", "G": "T", "T": "A"}.get(calls[10], "A")
+    phd_path = tmp_path / "Sample002_F.ab1.phd.1"
+    rows = [f"{base} 40 {i * 12 + 6}" for i, base in enumerate(calls)]
+    phd_path.write_text("BEGIN_DNA\n" + "\n".join(rows) + "\nEND_DNA\n")
+
+    read = Read(
+        id="with-phd", label="with-phd",
+        ab1_path=str(ab1_path), phd_path=str(phd_path),
+    )
+    prepare_read(read, Config())
+    assert read.calls == baseline.calls
+    assert read.phd_calls == "".join(calls)
+    assert read.phd_discrepancies is not None
+    assert read.phd_discrepancies.count == 1
+    assert read.phd_discrepancies.positions == [10]
 
 
 def test_orientation_and_alignment(analyzed):
@@ -128,8 +150,7 @@ def test_export_and_project_roundtrip(analyzed, demo_dir, tmp_path):
 
     project = Project(
         reference=reference,
-        wt_control=samples["Sample002"],
-        samples=[samples["Sample001"], samples["Sample003"]],
+        samples=[samples["Sample001"], samples["Sample002"], samples["Sample003"]],
     )
     project.samples[0].reads[0].orientation_override = "F"
     ppath = tmp_path / "demo.sanger-seek.json"
@@ -137,7 +158,7 @@ def test_export_and_project_roundtrip(analyzed, demo_dir, tmp_path):
     loaded, warnings = load_project(ppath)
     assert warnings == []
     assert loaded.reference is not None and loaded.reference.name == reference.name
-    assert loaded.wt_control is not None and loaded.wt_control.key == "Sample002"
-    assert {s.key for s in loaded.samples} == {"Sample001", "Sample003"}
+    assert loaded.wt_control is None
+    assert {s.key for s in loaded.samples} == {"Sample001", "Sample002", "Sample003"}
     assert len(loaded.sample_by_key("Sample001").reads) == 2
     assert loaded.sample_by_key("Sample001").reads[0].orientation_override == "F"

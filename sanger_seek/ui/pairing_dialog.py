@@ -1,4 +1,4 @@
-"""Manual assessed-read grouping and forward/reverse assignment."""
+"""Manual case grouping and forward/reverse assignment."""
 
 from __future__ import annotations
 
@@ -20,17 +20,17 @@ from ..core.model import Read, Sample
 
 
 class PairingDialog(QDialog):
-    """Edit sample membership and orientation hints for all assessed reads."""
+    """Edit case membership and orientation hints for all reads."""
 
     def __init__(self, samples: list[Sample], parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Pair Forward / Reverse Reads")
+        self.setWindowTitle("Assign Reads to Cases")
         self.resize(720, 420)
         self._rows: list[Read] = []
 
         layout = QVBoxLayout(self)
         help_text = QLabel(
-            "Give matching forward and reverse reads the same sample name. "
+            "Give matching forward and reverse reads the same case name. "
             "Choose a role when filenames are ambiguous; Auto lets alignment decide."
         )
         help_text.setWordWrap(True)
@@ -38,7 +38,7 @@ class PairingDialog(QDialog):
 
         reads = [(sample, read) for sample in samples for read in sample.reads]
         self.table = QTableWidget(len(reads), 4)
-        self.table.setHorizontalHeaderLabels(["Read", "Current files", "Sample", "Role"])
+        self.table.setHorizontalHeaderLabels(["Read", "Current files", "Case", "Role"])
         self.table.verticalHeader().setVisible(False)
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
@@ -54,6 +54,7 @@ class PairingDialog(QDialog):
                 name for name in (
                     read.ab1_path and read.ab1_path.rsplit("/", 1)[-1],
                     read.seq_path and read.seq_path.rsplit("/", 1)[-1],
+                    read.phd_path and read.phd_path.rsplit("/", 1)[-1],
                 ) if name
             )
             file_item = QTableWidgetItem(files)
@@ -80,7 +81,7 @@ class PairingDialog(QDialog):
 
     def _validate_and_accept(self) -> None:
         if any(not self.table.cellWidget(row, 2).text().strip() for row in range(self.table.rowCount())):
-            QMessageBox.warning(self, "Sample name required", "Every read must have a sample name.")
+            QMessageBox.warning(self, "Case name required", "Every read must have a case name.")
             return
         self.accept()
 

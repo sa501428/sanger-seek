@@ -50,30 +50,13 @@ def test_desktop_demo_analysis_and_screenshot(demo_dir, tmp_path):
     after = window.forward_trace.plot.getViewBox().viewRange()[0]
     assert after[1] - after[0] < before[1] - before[0]
 
-    control_files = [
-        str(demo_dir / "Sample002_F.ab1"),
-        str(demo_dir / "Sample002_F.seq"),
-        str(demo_dir / "Sample002_R.ab1"),
-        str(demo_dir / "Sample002_R.seq"),
-    ]
-    window.add_control_paths(control_files)
-    _wait_until(app, lambda: window._pending == 0)
-    assert window.project.wt_control is not None
-    assert len(window.project.wt_control.reads) == 2
     window._select_sample("Sample001")
     app.processEvents()
     visible_traces = [trace for trace in window.trace_views if trace.read is not None]
-    assert len(visible_traces) == 4
-    assert [label for label, _read in window.alignment.track_rows] == [
-        "WT Fwd", "WT Rev", "Sample Fwd", "Sample Rev",
-    ]
-    assert window.alignment.show_difference
-    assert len(window.alignment.track_rows) + 1 == 5  # reference + one sequence per trace
-    wt_call, sample_call = window.alignment.difference_call_at(window.cursor_ref)
-    assert wt_call is not None and sample_call is not None
-    sample1 = window.project.sample_by_key("Sample001")
-    assert sample1 is not None
-    assert any(v.control_status == "absent" for v in sample1.variants)
+    assert len(visible_traces) == 2
+    assert [label for label, _read in window.alignment.track_rows] == ["Fwd", "Rev"]
+    assert not window.alignment.show_difference
+    assert len(window.alignment.track_rows) + 1 == 3  # reference + F/R reads
 
     # A user pan/zoom on one raw-trace x-axis is propagated through reference
     # coordinates, not raw sample indices, to every other visible trace.
@@ -105,6 +88,19 @@ def test_desktop_demo_analysis_and_screenshot(demo_dir, tmp_path):
     assert all(rng is not None for rng in zoomed)
     assert source.visible_reference_range()[1] - source.visible_reference_range()[0] < before_span * 0.6
     assert all(abs((rng[0] + rng[1]) / 2 - clicked_ref) < 1 for rng in zoomed)
+
+    # Explicit case creation ignores filename prefixes for case membership,
+    # while still pairing each AB1 with its optional same-stem SEQ.
+    case_files = [
+        str(demo_dir / "Sample002_F.ab1"),
+        str(demo_dir / "Sample002_F.seq"),
+        str(demo_dir / "Sample002_R.ab1"),
+        str(demo_dir / "Sample002_R.seq"),
+    ]
+    window.add_case_paths("ExplicitCase", case_files)
+    _wait_until(app, lambda: window._pending == 0)
+    explicit = window.project.sample_by_key("ExplicitCase")
+    assert explicit is not None and len(explicit.reads) == 2
 
     assignments = []
     for sample in window.project.samples:

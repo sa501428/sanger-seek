@@ -1,7 +1,8 @@
-"""Reference loading: FASTA (sequence only) or GenBank (sequence + CDS features)."""
+"""Reference loading: plain/Mutation Surveyor SEQ, FASTA, or GenBank."""
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import numpy as np
@@ -9,7 +10,11 @@ from Bio import SeqIO
 
 from .dna import complement
 from .model import CDSFeature, Reference
-from .seqfile import load_seq
+from .seqfile import (
+    looks_like_mutation_surveyor,
+    load_seq,
+    parse_mutation_surveyor_text,
+)
 
 GENBANK_EXTS = {".gb", ".gbk", ".genbank", ".gbff"}
 FASTA_EXTS = {".fa", ".fasta", ".fna", ".ffn", ".txt"}
@@ -65,7 +70,25 @@ def load_reference(path: str | Path) -> Reference:
     if p.suffix.lower() == ".seq":
         # Some GenBank exports retain the generic .seq extension. Sniff the
         # record header before treating it as plain base-call text.
-        if not p.read_text(errors="replace").lstrip().startswith("LOCUS"):
+        text = p.read_text(errors="replace")
+        if not text.lstrip().startswith("LOCUS"):
+            if looks_like_mutation_surveyor(text):
+                parsed = parse_mutation_surveyor_text(text, name=p.name)
+                cds = _mutation_surveyor_cds(parsed.metadata, parsed.sequence, p.stem)
+                description = (
+                    parsed.metadata.get("Exon_And_Note")
+                    or parsed.metadata.get("Exon And Note")
+                    or "Mutation Surveyor annotated reference"
+                )
+                return Reference(
+                    name=parsed.gene or p.stem,
+                    seq=parsed.sequence,
+                    path=str(p),
+                    source="mutation-surveyor",
+                    cds=[cds] if cds else [],
+                    description=description,
+                    metadata=parsed.metadata,
+                )
             seq = load_seq(p)
             if not seq:
                 raise ValueError(f"{p.name}: empty reference sequence")
@@ -98,4 +121,39 @@ def load_reference(path: str | Path) -> Reference:
         source=fmt,
         cds=cds,
         description=getattr(record, "description", "") or "",
+    )
+
+
+def _mutation_surveyor_cds(
+    metadata: dict[str, str], genome: str, fallback_gene: str
+) -> CDSFeature | None:
+    """Convert simple Mutation Surveyor CDS coordinates to a CDS feature."""
+    raw_cds = metadata.get("CDS", "")
+    match = re.search(r"<?(\d+)\s*\.\.\s*>?(\d+)", raw_cds)
+    if not match:
+        return None
+    start_1, end_1 = (int(value) for value in match.groups())
+    start = max(start_1 - 1, 0)
+    end = min(end_1, len(genome))
+    if start >= end:
+        return None
+    strand = -1 if "complement" in raw_cds.lower() else 1
+    if strand == 1:
+        genomic_order = np.arange(start, end, dtype=np.int64)
+        cds_seq = genome[start:end]
+    else:
+        genomic_order = np.arange(end - 1, start - 1, -1, dtype=np.int64)
+        cds_seq = "".join(complement(genome[g]) for g in genomic_order)
+    try:
+        codon_start = int(metadata.get("Reading Frame (1,2,3)", "1"))
+    except ValueError:
+        codon_start = 1
+    return CDSFeature(
+        gene=metadata.get("Gene") or fallback_gene,
+        product=metadata.get("Exon_And_Note", ""),
+        strand=strand,
+        codon_start=min(max(codon_start, 1), 3),
+        parts=[(start, end)],
+        genomic_order=genomic_order,
+        cds_seq=cds_seq,
     )

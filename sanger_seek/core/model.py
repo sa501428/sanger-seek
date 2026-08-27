@@ -223,6 +223,7 @@ class Reference:
     source: str = "fasta"             # 'fasta' | 'genbank' | 'seq'
     cds: list[CDSFeature] = field(default_factory=list)
     description: str = ""
+    metadata: dict[str, str] = field(default_factory=dict)
 
     @property
     def n(self) -> int:

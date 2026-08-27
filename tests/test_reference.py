@@ -10,6 +10,32 @@ def test_load_seq_as_explicit_reference(tmp_path):
     assert ref.seq == "ACGTACGTNN"
     assert ref.source == "seq"
     assert ref.cds == []
+
+
+def test_load_mutation_surveyor_seq_reference(tmp_path):
+    path = tmp_path / "annotated.seq"
+    path.write_text("""\
+/Gene = "TP53";
+/Exon_And_Note = "exons 5-8";
+/Reading Frame (1,2,3) = 2;
+/CDS = 2..21;
+/Region of Interest = 5..18;
+/Translation = "  1 MEEPQ
+  6 SDPSV";
+        1  AATGGCTACC GAATAACCGG T
+""")
+    ref = load_reference(path)
+    assert ref.source == "mutation-surveyor"
+    assert ref.name == "TP53"
+    assert ref.seq == "AATGGCTACCGAATAACCGGT"
+    assert ref.description == "exons 5-8"
+    assert ref.metadata["Region of Interest"] == "5..18"
+    assert len(ref.cds) == 1
+    cds = ref.cds[0]
+    assert cds.gene == "TP53"
+    assert cds.parts == [(1, 21)]
+    assert cds.codon_start == 2
+    assert cds.cds_seq == ref.seq[1:21]
 from sanger_seek.devtools.demogen import CDS_LEN, UTR5
 
 

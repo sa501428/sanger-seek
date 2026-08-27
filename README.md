@@ -10,8 +10,9 @@ candidate variants against the raw traces. Sequence data stays on the Mac.
 ## Review workflow
 
 1. Choose **Load Reference…** and assign the `.seq` reference for the region or gene of
-   interest. FASTA and GenBank references remain supported; GenBank CDS annotations enable
-   coding and protein consequence labels.
+   interest. Plain sequence and Mutation Surveyor annotated `.seq` files are supported, as
+   are FASTA and GenBank. Mutation Surveyor Gene/CDS/Reading Frame metadata and GenBank CDS
+   annotations enable coding and protein consequence labels.
 2. Choose **New Case…**, name the case without assigning it a special biological role, then
    select all files belonging to it.
 3. Include the forward and reverse `.ab1` chromatograms. Same-stem `.seq`, `.phd`, and

@@ -1,7 +1,7 @@
 import pytest
 
 from sanger_seek.core.pairing import classify, scan_paths, split_direction
-from sanger_seek.core.seqfile import parse_seq_text
+from sanger_seek.core.seqfile import parse_mutation_surveyor_text, parse_seq_text
 from sanger_seek.core.phd import parse_phd_text
 
 
@@ -16,6 +16,30 @@ def test_parse_fasta_headered_seq():
 def test_parse_seq_rejects_garbage():
     with pytest.raises(ValueError):
         parse_seq_text("hello world this is not dna")
+
+
+def test_parse_mutation_surveyor_metadata_translation_and_numbered_dna():
+    text = """\
+/Gene = "BRCA2";
+/Exon_And_Note = "coding reference";
+/Reading Frame (1,2,3) = 2;
+/CDS = 2..24;
+/Amplicon Id = "";
+/Translation = "    1 LLEICLKLVG CKMKKGLSSS
+   21 ACGT ACGT
+ 1121 VKEISDIVQR XQ";
+
+        1  ATGTTGGAGA TCTGCCTGAA GACCT
+       26  NRYKMSWBDH V
+"""
+    parsed = parse_mutation_surveyor_text(text, name="BRCA2.seq")
+    assert parsed.gene == "BRCA2"
+    assert parsed.metadata["CDS"] == "2..24"
+    assert parsed.metadata["Reading Frame (1,2,3)"] == "2"
+    assert "1121 VKEISDIVQR XQ" in parsed.translation
+    # The numbered translation line containing ACGT is metadata, not DNA.
+    assert parsed.sequence == "ATGTTGGAGATCTGCCTGAAGACCTNRYKMSWBDHV"
+    assert parse_seq_text(text) == parsed.sequence
 
 
 def test_split_direction():
